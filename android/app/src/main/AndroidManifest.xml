@@ -1,10 +1,32 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- 内嵌博客需要通过 HTTPS 联网，release 版同样需要该权限。 -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- 通知：新文章 / 投稿审核通过提醒（Android 13+ 需运行时授予）。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- 后台周期检查更新：设备重启后需恢复任务。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- 通知精确推送时间（Android 12+ 默认禁用，需显式声明）。 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32"/>
+
     <application
         android:label="YBH"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- WorkManager 自带的初始化器会尝试反射应用内所有 Worker；
+             这里禁用它，改由 App 在 Dart 侧按需初始化，避免重复注册。 -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationName}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
         <activity
             android:name=".MainActivity"
             android:exported="true"

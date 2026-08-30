@@ -15,10 +15,17 @@ import 'post_detail_page.dart';
 
 /// 「我的」页：未登录显示登录表单；登录后显示用户信息、我的文章与写文章入口。
 class ProfileTab extends StatefulWidget {
-  const ProfileTab({super.key, this.onOpenCategoryOrder});
+  const ProfileTab({
+    super.key,
+    this.onOpenCategoryOrder,
+    this.onOpenNotificationSettings,
+  });
 
   /// 打开「分类排序」页（由外壳实现，返回后刷新文章页分类顺序）。
   final Future<void> Function()? onOpenCategoryOrder;
+
+  /// 打开「通知设置」页。
+  final Future<void> Function()? onOpenNotificationSettings;
 
   @override
   State<ProfileTab> createState() => _ProfileTabState();
@@ -321,6 +328,16 @@ class _ProfileTabState extends State<ProfileTab> {
                   ),
                 ),
               ),
+              const Divider(height: 1, indent: 56),
+              ListTile(
+                leading: const Icon(Icons.notifications_outlined),
+                title: const Text('通知设置'),
+                subtitle: const Text('新文章发布、投稿审核通过提醒'),
+                trailing: const Icon(Icons.chevron_right_outlined, size: 20),
+                onTap: widget.onOpenNotificationSettings == null
+                    ? null
+                    : () => widget.onOpenNotificationSettings!(),
+              ),
             ],
           ),
         ),
@@ -342,9 +359,8 @@ class _ProfileTabState extends State<ProfileTab> {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  '义编会（YBH）WordPress 博客的多平台客户端。\n'
-                  '「文章」页通过 WordPress REST API 原生渲染，速度快、不依赖 WebView；'
-                  '「整站」页内嵌完整站点，保留评论、播放器等全部功能。\n'
+                  'YBH 是义编会（www.yibianhui.cn）的官方客户端：'
+                  '刷文章、逛整站、投稿、摇人，一个 App 全搞定。\n'
                   '支持 Android / iOS / macOS / Web，桌面端会跳转到系统浏览器。',
                   style: TextStyle(
                     fontSize: 13.5,
@@ -352,7 +368,44 @@ class _ProfileTabState extends State<ProfileTab> {
                     color: colorScheme.onSurfaceVariant,
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
+                // 开源入口：主页面上只放一句人话，技术细节收进下方折叠区。
+                OutlinedButton.icon(
+                  onPressed: () => launchUrl(
+                    Uri.parse('https://github.com/Yibianhui/YBH-Blog-App'),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                  icon: const Icon(Icons.code_outlined, size: 18),
+                  label: const Text('查看开源代码（GitHub）'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(44),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                // 技术细节折叠区：不在主页面上用术语打扰普通用户。
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text(
+                    '技术信息',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'YBH 用 Flutter 开发（Dart），数据来自站点的 WordPress REST 接口。'
+                        '「文章」页为原生列表 + 正文阅读器，「整站」页为内嵌完整网站。'
+                        '项目以 MIT 协议开源在 GitHub，欢迎提交 Issue 或代码。',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.7,
+                          color: colorScheme.outline,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
                 Text(
                   'v$_version ($_buildNumber)',
                   style: TextStyle(

@@ -6,29 +6,35 @@ import 'package:url_launcher/url_launcher.dart';
 import '../app_config.dart';
 import '../data/blog_api.dart';
 import '../data/update_checker.dart';
+import '../ui/category_order_page.dart';
+import '../ui/home_tab.dart';
 import '../ui/profile_tab.dart';
 import '../ui/posts_tab.dart';
 import '../ui/search_page.dart';
-import '../ui/category_order_page.dart';
 import 'webview_ui_state.dart';
 import 'webview_tab.dart' if (dart.library.html) 'webview_tab_stub.dart';
 
-/// 主外壳：底部导航（文章 / 整站 / 我的）+ 抽屉菜单 + 动态 AppBar。
+/// 主外壳：底部导航（首页 / 文章 / 整站 / 我的）+ 抽屉菜单 + 动态 AppBar。
 class HomeShellPage extends StatefulWidget {
   const HomeShellPage({
     super.key,
     required this.darkMode,
     required this.onToggleDarkMode,
+    this.onOpenNotificationSettings,
   });
 
   final bool darkMode;
   final ValueChanged<bool> onToggleDarkMode;
+
+  /// 打开「通知设置」页。
+  final Future<void> Function()? onOpenNotificationSettings;
 
   @override
   State<HomeShellPage> createState() => _HomeShellPageState();
 }
 
 class _HomeShellPageState extends State<HomeShellPage> {
+  /// tab 索引：0 首页 / 1 文章 / 2 整站 / 3 我的。
   int _tab = 0;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<PostsTabState> _postsKey = GlobalKey<PostsTabState>();
@@ -66,14 +72,14 @@ class _HomeShellPageState extends State<HomeShellPage> {
   }
 
   /// Android 返回键逻辑：
-  /// 抽屉开着 → 关抽屉；整站页可后退 → 网页后退；否则切回文章页；
-  /// 已在文章页 → 双击退出。
+  /// 抽屉开着 → 关抽屉；整站页可后退 → 网页后退；否则切回首页；
+  /// 已在首页 → 双击退出。
   Future<void> _handleBack() async {
     if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
       _scaffoldKey.currentState?.closeDrawer();
       return;
     }
-    if (_tab == 1) {
+    if (_tab == 2) {
       final state = _webKey.currentState;
       if (state != null && await state.goBackIfPossible()) return;
       _selectTab(0);
@@ -152,15 +158,26 @@ class _HomeShellPageState extends State<HomeShellPage> {
           sizing: StackFit.expand,
           index: _tab,
           children: [
+            HomeTab(
+              onOpenSite: () => _selectTab(2),
+            ),
             PostsTab(key: _postsKey, onOpenCategoryOrder: _openCategoryOrder),
             BlogWebViewPage(key: _webKey, uiState: _webUi),
-            ProfileTab(onOpenCategoryOrder: _openCategoryOrder),
+            ProfileTab(
+              onOpenCategoryOrder: _openCategoryOrder,
+              onOpenNotificationSettings: widget.onOpenNotificationSettings,
+            ),
           ],
         ),
         bottomNavigationBar: NavigationBar(
           selectedIndex: _tab,
           onDestinationSelected: _selectTab,
           destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home),
+              label: '首页',
+            ),
             NavigationDestination(
               icon: Icon(Icons.article_outlined),
               selectedIcon: Icon(Icons.article),
@@ -184,7 +201,7 @@ class _HomeShellPageState extends State<HomeShellPage> {
 
   AppBar _buildAppBar() {
     // 整站页在 AppBar 底部显示加载进度条。
-    final progressBar = _tab == 1
+    final progressBar = _tab == 2
         ? PreferredSize(
             preferredSize: const Size.fromHeight(3),
             child: SizedBox(
@@ -210,6 +227,11 @@ class _HomeShellPageState extends State<HomeShellPage> {
         return AppBar(
           title: const _AppTitle(title: AppConfig.appName),
           bottom: progressBar,
+        );
+      case 1:
+        return AppBar(
+          title: const _AppTitle(title: '文章'),
+          bottom: progressBar,
           actions: [
             IconButton(
               tooltip: '搜索文章',
@@ -232,7 +254,7 @@ class _HomeShellPageState extends State<HomeShellPage> {
             ),
           ],
         );
-      case 1:
+      case 2:
         return AppBar(
           title: const _AppTitle(title: '整站浏览'),
           bottom: progressBar,
@@ -279,10 +301,12 @@ class _HomeShellPageState extends State<HomeShellPage> {
         } else if (index == 2) {
           _selectTab(2);
         } else if (index == 3) {
-          _shareSite();
+          _selectTab(3);
         } else if (index == 4) {
-          _openSiteInBrowser();
+          _shareSite();
         } else if (index == 5) {
+          _openSiteInBrowser();
+        } else if (index == 6) {
           _copySiteUrl();
         }
       },
@@ -326,6 +350,10 @@ class _HomeShellPageState extends State<HomeShellPage> {
               ),
             ],
           ),
+        ),
+        const NavigationDrawerDestination(
+          icon: Icon(Icons.home_outlined),
+          label: Text('首页'),
         ),
         const NavigationDrawerDestination(
           icon: Icon(Icons.article_outlined),

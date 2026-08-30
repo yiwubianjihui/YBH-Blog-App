@@ -145,6 +145,33 @@ abstract final class BlogApi {
     return PostsPage(posts: posts, total: total, totalPages: totalPages);
   }
 
+  /// 按 slug 拉取指定文章（用于首页展台精选）。
+  ///
+  /// WordPress REST 一次只接受一个 slug，这里逐个请求；找不到的静默跳过。
+  static Future<List<PostSummary>> fetchPostsBySlugs(List<String> slugs) async {
+    final posts = <PostSummary>[];
+    for (final slug in slugs) {
+      if (slug.trim().isEmpty) continue;
+      try {
+        final uri = Uri.parse('${AppConfig.apiBase}/posts').replace(
+          queryParameters: {
+            'slug': slug.trim(),
+            'per_page': '1',
+            '_embed': '1',
+          },
+        );
+        final response = await http.get(uri).timeout(_timeout);
+        if (response.statusCode != 200) continue;
+        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        if (decoded is! List || decoded.isEmpty) continue;
+        posts.add(PostSummary.fromJson(decoded.first as Map<String, dynamic>));
+      } catch (_) {
+        // 单个失败不影响其他。
+      }
+    }
+    return posts;
+  }
+
   /// 拉取分类列表（按文章数降序）。
   static Future<List<BlogCategory>> fetchCategories({int perPage = 50}) async {
     final uri = Uri.parse('${AppConfig.apiBase}/categories').replace(
