@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../app_config.dart';
 import '../data/blog_api.dart';
 import '../data/home_config.dart';
 import '../data/site_stats.dart';
 import '../lucky/lucky_page.dart';
+import '../shell/webview_ui_state.dart';
+import '../shell/webview_tab.dart' if (dart.library.html) '../shell/webview_tab_stub.dart';
 import 'page_reader_page.dart';
 import 'post_card.dart';
 import 'post_detail_page.dart';
@@ -163,10 +164,10 @@ class _HomeTabState extends State<HomeTab> {
 
   void _openLink(HomeLink link) {
     if (link.url != null && link.url!.isNotEmpty) {
-      // 配置了直链：整站页跳转，保持网站体验。
+      // 配置了直链：应用内 WebView 直接打开（站内留在应用内，站外自动转浏览器）。
       Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => _ExternalWebPage(url: link.url!),
+          builder: (_) => _InAppWebPage(title: link.title, url: link.url!),
         ),
       );
       return;
@@ -319,62 +320,70 @@ class _HomeTabState extends State<HomeTab> {
   }
 }
 
-/// 打开站内链接的简易网页页（WebView，用于有直链的固定链接）。
-class _ExternalWebPage extends StatefulWidget {
-  const _ExternalWebPage({required this.url});
+/// 应用内网页：首页「从这里开始」里配置了直链的卡片用它打开。
+///
+/// 之前这里是个占位页 —— 只提示「这个链接指向网站页面」，再让用户手动去浏览器，
+/// 等于点了没反应。现在直接内嵌 WebView：站内地址留在应用内，
+/// 站外地址仍由 [BlogWebViewPage] 的导航策略转交系统浏览器。
+class _InAppWebPage extends StatefulWidget {
+  const _InAppWebPage({required this.title, required this.url});
 
+  final String title;
   final String url;
 
   @override
-  State<_ExternalWebPage> createState() => _ExternalWebPageState();
+  State<_InAppWebPage> createState() => _InAppWebPageState();
 }
 
-class _ExternalWebPageState extends State<_ExternalWebPage> {
+class _InAppWebPageState extends State<_InAppWebPage> {
+  final WebViewUiState _ui = WebViewUiState();
+  final GlobalKey<BlogWebViewState> _webKey = GlobalKey<BlogWebViewState>();
+
+  @override
+  void dispose() {
+    _ui.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    // 复用整站 WebView 能力（webview_tab.dart 里的 BlogWebViewPage）。
-    // 简单起见：整站链接交给整站标签页处理，这里用浏览器打开。
     return Scaffold(
       appBar: AppBar(
-        title: const Text('网页'),
+        title: Text(widget.title),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(3),
+          child: SizedBox(
+            height: 3,
+            child: ListenableBuilder(
+              listenable: _ui.merged,
+              builder: (context, child) {
+                if (!_ui.loading.value) return const SizedBox.shrink();
+                final progress = _ui.progress.value;
+                return LinearProgressIndicator(
+                  value: progress <= 0 ? null : progress / 100,
+                  minHeight: 3,
+                );
+              },
+            ),
+          ),
+        ),
         actions: [
           IconButton(
+            tooltip: '刷新',
+            onPressed: () => _webKey.currentState?.reload(),
+            icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
             tooltip: '用浏览器打开',
-            onPressed: () => launchUrl(
-              Uri.parse(widget.url),
-              mode: LaunchMode.externalApplication,
-            ),
+            onPressed: () => _webKey.currentState?.openInBrowser(),
             icon: const Icon(Icons.open_in_browser_outlined),
           ),
         ],
       ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.language_outlined, size: 48),
-              const SizedBox(height: 12),
-              const Text('这个链接指向网站页面'),
-              const SizedBox(height: 6),
-              Text(widget.url,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.outline,
-                  )),
-              const SizedBox(height: 18),
-              FilledButton.icon(
-                onPressed: () => launchUrl(
-                  Uri.parse(widget.url),
-                  mode: LaunchMode.externalApplication,
-                ),
-                icon: const Icon(Icons.open_in_browser),
-                label: const Text('用浏览器打开'),
-              ),
-            ],
-          ),
-        ),
+      body: BlogWebViewPage(
+        key: _webKey,
+        uiState: _ui,
+        initialUrl: widget.url,
       ),
     );
   }

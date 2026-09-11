@@ -36,6 +36,12 @@ class HomeShellPage extends StatefulWidget {
 class _HomeShellPageState extends State<HomeShellPage> {
   /// tab 索引：0 首页 / 1 文章 / 2 整站 / 3 我的。
   int _tab = 0;
+
+  /// 「整站」标签是否已被访问过。
+  ///
+  /// 站点首页要拉 20+ MB 中文字体资源，而 IndexedStack 会在冷启动时就把所有子页
+  /// 建好 —— 等于每次打开 App 都在后台静默下载整站。改成首次切到「整站」才创建。
+  bool _webVisited = false;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<PostsTabState> _postsKey = GlobalKey<PostsTabState>();
   final GlobalKey<BlogWebViewState> _webKey = GlobalKey<BlogWebViewState>();
@@ -68,7 +74,10 @@ class _HomeShellPageState extends State<HomeShellPage> {
   }
 
   void _selectTab(int index) {
-    setState(() => _tab = index);
+    setState(() {
+      _tab = index;
+      if (index == 2) _webVisited = true;
+    });
   }
 
   /// Android 返回键逻辑：
@@ -162,7 +171,11 @@ class _HomeShellPageState extends State<HomeShellPage> {
               onOpenSite: () => _selectTab(2),
             ),
             PostsTab(key: _postsKey, onOpenCategoryOrder: _openCategoryOrder),
-            BlogWebViewPage(key: _webKey, uiState: _webUi),
+            // 首次进入「整站」才创建 WebView（见 _webVisited 注释）。
+            if (_webVisited)
+              BlogWebViewPage(key: _webKey, uiState: _webUi)
+            else
+              const SizedBox.shrink(),
             ProfileTab(
               onOpenCategoryOrder: _openCategoryOrder,
               onOpenNotificationSettings: widget.onOpenNotificationSettings,

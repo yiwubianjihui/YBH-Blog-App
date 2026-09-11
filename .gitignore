@@ -60,3 +60,6 @@ app.*.map.json
 .rc*.txt
 .po*.txt
 
+
+# Gradle 根目录构建产物（Flutter 构建时生成）
+/android/build/

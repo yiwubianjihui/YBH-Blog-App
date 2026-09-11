@@ -5,9 +5,12 @@ import 'package:flutter/material.dart';
 import 'webview_ui_state.dart';
 
 class BlogWebViewPage extends StatefulWidget {
-  const BlogWebViewPage({super.key, required this.uiState});
+  const BlogWebViewPage({super.key, required this.uiState, this.initialUrl});
 
   final WebViewUiState uiState;
+
+  /// 起始地址（Web 平台占位实现，忽略）。
+  final String? initialUrl;
 
   @override
   State<BlogWebViewPage> createState() => BlogWebViewState();

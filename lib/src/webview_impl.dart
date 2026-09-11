@@ -23,46 +23,120 @@ import 'shell/webview_ui_state.dart';
 ///   应用内 HttpClient 拿到的会话无效，故必须由 WebView 自身登录）；
 ///   退出登录时清空 WebView Cookie。
 class BlogWebViewPage extends StatefulWidget {
-  const BlogWebViewPage({super.key, required this.uiState});
+  const BlogWebViewPage({super.key, required this.uiState, this.initialUrl});
 
   final WebViewUiState uiState;
+
+  /// 起始地址；为空表示站点首页。首页「从这里开始」的直链会用这个参数
+  /// 直接内嵌打开，而不是丢给系统浏览器。
+  final String? initialUrl;
 
   @override
   State<BlogWebViewPage> createState() => BlogWebViewState();
 }
 
 class BlogWebViewState extends State<BlogWebViewPage> {
-  /// 站点主题自带动画/毛玻璃/固定背景等效果，在低端 Android WebView 上会
-  /// 导致滚动掉帧。页面加载完成后注入一段“性能模式”样式：
-  /// - 关闭 CSS 动画与过渡
-  /// - 固定背景改为随内容滚动（Android WebView 固定背景重绘开销极大）
-  /// - 关闭 backdrop-filter / filter（GPU 合成开销大）
-  /// - 隐藏粒子 canvas
-  /// - 还原 AOS 进入动画元素的最终可见状态
-  static const String _performanceScript = '''
+  /// 页面脚本：尽早注入（不等 `window.load`）。
+  ///
+  /// 两件事：
+  /// 1. **性能模式样式**：站点主题自带动画/毛玻璃/固定背景/粒子 canvas，在旧设备
+  ///    WebView 上掉帧明显。
+  /// 2. **兜底移除站点载入遮罩 `#preload`**：站点首页要拉 20+ MB 中文字体，
+  ///    `window.load` 在移动网络下可能几十秒甚至几分钟都不触发，而站点自己的遮罩
+  ///    恰好挂在 `window.load` 上移除 —— 两者叠加就是「整站页一直转圈、不见内容」。
+  ///
+  /// 因此在导航早期（onPageStarted / 进度 10·35·65）和 onPageFinished 都注入一次，
+  /// 靠 `window.__ybhPageScript` + 样式元素 id 双重去重，重复注入无副作用。
+  static const String _pageScript = '''
 (function () {
-  if (window.__ybhPerfApplied) { return; }
-  window.__ybhPerfApplied = true;
+  if (window.__ybhPageScript) { return; }
+  window.__ybhPageScript = true;
+
+  // 诊断：把页面里的 JS 报错 / 资源加载失败回报给 App（每页最多 4 条）。
+  // 站点在 WebView 里若因某处报错导致 app.js 未执行完，载入遮罩就不会被摘掉，
+  // 没有这层回报只能靠猜。Dart 侧用 YbhDiag 通道接收，只打日志、不影响页面。
+  function report(text) {
+    try { if (window.YbhDiag) { window.YbhDiag.postMessage(String(text).slice(0, 300)); } } catch (e) {}
+  }
   try {
-    var css = [
-      '*{-webkit-animation-duration:0s!important;animation-duration:0s!important;',
-      '-webkit-animation-iteration-count:1!important;animation-iteration-count:1!important;',
-      '-webkit-transition-duration:0s!important;transition-duration:0s!important;}',
-      '*{background-attachment:scroll!important;}',
-      '*{-webkit-backdrop-filter:none!important;backdrop-filter:none!important;}',
-      '*{filter:none!important;}',
-      'canvas{display:none!important;}',
-      '[data-aos]{opacity:1!important;-webkit-transform:none!important;transform:none!important;}',
-      'html,body{scroll-behavior:auto!important;}'
-    ].join('\\n');
-    var style = document.createElement('style');
-    style.id = 'ybh-perf-style';
-    style.appendChild(document.createTextNode(css));
-    document.head.appendChild(style);
-    if (window.AOS && typeof window.AOS.refreshHard === 'function') {
-      try { window.AOS.refreshHard(); } catch (e) {}
-    }
+    var budget = 4;
+    function send(tag, text) { if (budget > 0) { budget--; report(tag + ' | ' + text); } }
+    window.addEventListener('error', function (ev) {
+      var t = ev && ev.target;
+      if (t && t.tagName) {
+        send('资源失败', t.tagName + ' ' + (t.currentSrc || t.src || t.href || ''));
+      } else {
+        send('JS错误', (ev && ev.message ? ev.message : 'unknown') +
+          ' @ ' + (ev && ev.filename ? ev.filename : '') + ':' + (ev && ev.lineno ? ev.lineno : 0));
+      }
+    }, true);
+    window.addEventListener('unhandledrejection', function (ev) {
+      send('Promise拒绝', ev && ev.reason ? ev.reason : 'unknown');
+    });
   } catch (e) {}
+
+  function applyPerf() {
+    try {
+      if (document.getElementById('ybh-perf-style')) { return; }
+      var css = [
+        '*{-webkit-animation-duration:0s!important;animation-duration:0s!important;',
+        '-webkit-animation-iteration-count:1!important;animation-iteration-count:1!important;',
+        '-webkit-transition-duration:0s!important;transition-duration:0s!important;}',
+        '*{background-attachment:scroll!important;}',
+        '*{-webkit-backdrop-filter:none!important;backdrop-filter:none!important;}',
+        '*{filter:none!important;}',
+        'canvas{display:none!important;}',
+        '[data-aos]{opacity:1!important;-webkit-transform:none!important;transform:none!important;}',
+        'html,body{scroll-behavior:auto!important;}'
+      ].join('\\n');
+      var style = document.createElement('style');
+      style.id = 'ybh-perf-style';
+      style.appendChild(document.createTextNode(css));
+      (document.head || document.documentElement).appendChild(style);
+      if (window.AOS && typeof window.AOS.refreshHard === 'function') {
+        try { window.AOS.refreshHard(); } catch (e) {}
+      }
+    } catch (e) {}
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyPerf);
+  } else {
+    applyPerf();
+  }
+
+  // 兜底：DOM 解析完成后，只要站点遮罩还在就淡出移除（最多盯 24 秒）。
+  var ticks = 0;
+  var timer = setInterval(function () {
+    ticks++;
+    if (document.readyState !== 'loading') {
+      applyPerf();
+      // 一次性盘点已加载失败（naturalWidth 为 0）的图片，方便定位站点侧破图。
+      if (!window.__ybhImgChecked) {
+        window.__ybhImgChecked = true;
+        try {
+          var bad = [];
+          var imgs = document.images || [];
+          for (var i = 0; i < imgs.length && bad.length < 3; i++) {
+            if (imgs[i].complete && imgs[i].naturalWidth === 0) {
+              bad.push(imgs[i].getAttribute('src') || '(空 src)');
+            }
+          }
+          if (bad.length) { report('破图 | ' + bad.join(' ; ')); }
+        } catch (e) {}
+      }
+      var mask = document.getElementById('preload');
+      if (mask) {
+        try {
+          mask.style.setProperty('transition', 'opacity .25s linear');
+          mask.style.setProperty('opacity', '0', 'important');
+          mask.style.setProperty('pointer-events', 'none', 'important');
+        } catch (e) {}
+        setTimeout(function () { try { mask.remove(); } catch (e) {} }, 320);
+      }
+    }
+    if (ticks > 60) { clearInterval(timer); }
+  }, 400);
 })();
 ''';
 
@@ -142,6 +216,9 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   late final WebViewController _controller;
   bool _androidConfigured = false;
 
+  /// 已应用的 WebView 底色是否为深色（跟随明暗主题，避免暗色下闪白）。
+  bool? _darkBackground;
+
   /// 是否正在执行自动登录（页面完成回调里判断是否要填表提交）。
   bool _autoLogging = false;
 
@@ -156,14 +233,28 @@ class BlogWebViewState extends State<BlogWebViewPage> {
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..addJavaScriptChannel(
+        'YbhDiag',
+        onMessageReceived: (JavaScriptMessage message) {
+          // 页面侧诊断回报（JS 报错 / 资源加载失败），仅出现问题时才有输出。
+          debugPrint('[YBH WebView] ${message.message}');
+        },
+      )
       ..setBackgroundColor(const Color(0xFFF5F6F8))
       ..setNavigationDelegate(
         NavigationDelegate(
-          onProgress: (int progress) => _ui.progress.value = progress,
+          onProgress: (int progress) {
+            _ui.progress.value = progress;
+            // 关键进度点补注：越早解除站点载入遮罩，整站页越快见到内容。
+            if (progress == 10 || progress == 35 || progress == 65) {
+              _injectPageScript();
+            }
+          },
           onPageStarted: (String url) {
             _ui.currentUrl.value = url;
             _ui.loading.value = true;
             _ui.hasError.value = false;
+            _injectPageScript();
           },
           onPageFinished: (String url) async {
             _ui.currentUrl.value = url;
@@ -201,8 +292,8 @@ class BlogWebViewState extends State<BlogWebViewPage> {
                 // 忽略：仅调试用途。
               }
             }
-            // 性能模式：关闭站点重特效，提升旧设备 WebView 滚动流畅度。
-            await _controller.runJavaScript(_performanceScript);
+            // 性能模式 + 兜底移除站点载入遮罩（早期已注入，这里兜最后一刀）。
+            _injectPageScript();
           },
           onWebResourceError: (WebResourceError error) {
             // 只对主框架错误显示错误页，避免图片等子资源失败误报。
@@ -219,7 +310,7 @@ class BlogWebViewState extends State<BlogWebViewPage> {
           },
         ),
       );
-    _controller.loadRequest(Uri.parse(AppConfig.blogUrl));
+    _controller.loadRequest(Uri.parse(widget.initialUrl ?? AppConfig.blogUrl));
     // App 登录/退出事件：登录 → WebView 自动登录；退出 → 清 Cookie。
     wpAuth.webLoginRequested.addListener(_onWebLoginRequested);
     // 冷启动时若 App 已登录但 WebView 尚无会话：尝试一次自动登录，
@@ -290,6 +381,27 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   }
 
   /// Android 专项调优：关闭滚动条与过度滚动光晕，减少滚动时系统额外绘制。
+  /// 尽早注入页面脚本（性能样式 + 兜底移除站点载入遮罩）。
+  ///
+  /// 导航早期调用时目标文档可能还在切换，失败或被作用在旧文档上都没关系：
+  /// 脚本自带去重，后续进度点与 onPageFinished 会再补一次。
+  void _injectPageScript() {
+    _controller.runJavaScript(_pageScript).catchError((Object _) {});
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // WebView 自身底色：跟随明暗主题，避免暗色模式下页面加载瞬间闪白。
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    if (dark != _darkBackground) {
+      _darkBackground = dark;
+      _controller.setBackgroundColor(
+        dark ? const Color(0xFF17191C) : const Color(0xFFF5F6F8),
+      );
+    }
+  }
+
   Future<void> _configureAndroidWebView() async {
     if (_androidConfigured) return;
     _androidConfigured = true;

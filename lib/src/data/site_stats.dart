@@ -76,7 +76,10 @@ abstract final class SiteStatsFetcher {
         final content = (item['content'] as Map?)?['rendered'] as String? ?? '';
         words += _countWords(content);
         final date = DateTime.tryParse((item['date'] as String?) ?? '');
-        if (date != null && (earliest == null || date.isBefore(earliest))) {
+        // 只接受「讲得通」的发布日期，见 _isPlausibleDate。
+        if (date != null &&
+            _isPlausibleDate(date) &&
+            (earliest == null || date.isBefore(earliest))) {
           earliest = date;
         }
       }
@@ -92,6 +95,18 @@ abstract final class SiteStatsFetcher {
     } catch (_) {
       return null;
     }
+  }
+
+  /// 判断发布日期是否落在合理区间。
+  ///
+  /// 站点存在历史脏数据：文章 552《时间化石》的 `date` 是
+  /// `0001-01-01T12:08:00`（MySQL 零日期残留），而 Dart 的
+  /// `DateTime.tryParse` 会照单全收，于是「最早日期」落在公元 1 年，
+  /// 建站天数被算成 739869 天。这里把明显不可能的日期直接排除。
+  static bool _isPlausibleDate(DateTime date) {
+    if (date.year < 2000 || date.year > 2100) return false;
+    // 容忍少量时区/预发布造成的未来时间，但拒绝真正的未来日期。
+    return !date.isAfter(DateTime.now().add(const Duration(days: 1)));
   }
 
   /// 去掉 HTML 标签后，统计「中文字符 + 字母数字」的个数（与站点口径接近）。
