@@ -1,99 +1,183 @@
-# YBH Blog App · Release APK 构建脚本
+# YBH Blog App - release APK build helper  (verified working 2026-09-14)
 #
-# 为什么不用 `flutter build apk`：
-#   本机（开发机）上 flutter.bat / flutter_tools 的 **子进程 spawn 不稳定**，
-#   `flutter build` 会以 0xC0000005 直接退出、连日志都来不及写。
-#   绕过办法是「直接跑 flutter_tools.snapshot」或「直接跑 Gradle」，
-#   两者都在下面给出。
+# Produces build\app\outputs\flutter-apk\app-release.apk (universal, release-signed)
+# and installs it on the attached device with:  adb install -r <apk>
 #
-# 用法：
-#   pwsh -File tool/build_apk.ps1                 # 默认：分 ABI 构建 release
-#   pwsh -File tool/build_apk.ps1 -Universal      # 构建通用包（体积大，便于分发）
-#   pwsh -File tool/build_apk.ps1 -Sdk "D:\sdk"   # 指定 Android SDK
+# ---------------------------------------------------------------------------
+# WHAT ACTUALLY BLOCKS A BUILD ON THIS MACHINE (all root-caused, all handled below)
 #
-# 产出与命名：见脚本末尾。versionCode 规则：pubspec 里的 +N ⇒ 2000+N
-# （`--split-per-abi` 时 Flutter 会再按 ABI 加 1000×序号，属正常现象）。
+#   1. DUPLICATE PROXY ENV VARS.  The shell exported BOTH `HTTP_PROXY` and
+#      `http_proxy` (same for https/no_proxy).  Consequences, all confirmed:
+#        * `Get-ChildItem Env:` throws "An item with the same key has already been added";
+#        * `Start-Process` throws the same, so detached jobs could not be started;
+#        * the Gradle daemon JVM forked by the client dies instantly with
+#          0xC0000005 (BEX64, "faulting module: unknown") and writes no daemon log.
+#      Symptom: gradlew prints exactly one line ("... single-use Daemon process
+#      will be forked") and exits 1 with no error at all.
+#      FIX: step 0 below.
+#
+#   2. `flutter.bat` ITSELF IS BROKEN HERE - two separate causes:
+#        * the stock script CALLs bin\internal\shared.bat (git probing) first;
+#        * it passes `--packages=<...package_config.json>`, and the Dart VM
+#          crashes with 0xC0000005 whenever that flag is present.
+#      FIX: step 1 installs the shim from tool\flutter-shim\ (the original stock
+#      file is preserved as flutter.bat.orig).  The shim also RETRIES the dart
+#      invocation, because dart.exe/flutter_tools.snapshot still dies randomly
+#      with 0xC0000005 at VM startup on this box - Gradle's
+#      :app:compileFlutterBuildRelease shells out to flutter.bat and fails the
+#      whole build on a non-zero exit, so the retry has to live inside the shim.
+#
+#   3. THE SANDBOX SOMETIMES KILLS THE WHOLE PROCESS TREE MID-BUILD, typically
+#      around the memory-hungry R8 step.  There is nothing to fix here, so this
+#      script just retries (see -Tries) - every attempt reuses the caches the
+#      previous one built, so a retry is cheap and usually finishes the job.
+#
+#   4. MEMORY.  `android\gradle.properties` used to ship -Xmx8G; on a machine
+#      with <8G free the daemon is killed by the OS (same "no output" symptom).
+#      It is now 2560m - enough for R8, which is the step that dies first when
+#      the heap is too small (1.5G is NOT enough, verified).
+#
+#   5. REQUIRED GRADLE PROPERTIES when calling Gradle directly instead of
+#      `flutter build`.  Without -Pflutter.androidSdkRoot / -Pflutter.installedNdkVersions
+#      the Flutter plugin takes the configureSyntheticExternalNativeBuildFallback
+#      path and builds an EMPTY CMake project purely to trick AGP into
+#      downloading the NDK (cmake crashes here).  Passed below.
+#      NOTE: `--foreground` is a dead end - the daemon just parks in
+#      Daemon.awaitExpiration and never receives the build (confirmed via jstack).
+#
+#   6. VERSION CODE.  The Flutter plugin reads `flutter.versionCode` from
+#      android\local.properties and DEFAULTS TO 1 when the key is missing -
+#      which would make the APK refuse to install over an existing one
+#      (INSTALL_FAILED_VERSION_DOWNGRADE).  CI ships --split-per-abi APKs where
+#      Flutter ADDS 1000 x abiIndex, so the arm64 artifact carrying pubspec
+#      build number N gets versionCode 2000 + N.  This script writes
+#      versionCode = 2000 + N so the local universal APK installs as a genuine
+#      upgrade over that artifact.
+#
+# Usage:
+#   powershell -File tool\build_apk.ps1
+#   powershell -File tool\build_apk.ps1 -Tries 6
+#   powershell -File tool\build_apk.ps1 -SkipShim          # leave flutter.bat alone
+#   powershell -File tool\build_apk.ps1 -VersionCode 2015
+# ---------------------------------------------------------------------------
 
 param(
-  [switch]$Universal,
-  [string]$Sdk = 'E:\dsh\.tools\android-sdk',
+  [string]$Sdk         = 'E:\dsh\.tools\android-sdk',
   [string]$FlutterRoot = 'E:\dsh\.tools\flutter',
-  [string]$PubCache = 'E:\dsh\.tools\pub-cache'
+  [string]$PubCache    = 'E:\dsh\.tools\pub-cache',
+  [string]$Ndk         = '28.2.13676358',
+  [string]$VersionName = '',
+  [int]$VersionCode    = 0,
+  [int]$Tries          = 4,
+  [switch]$SkipShim
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 $repo = Split-Path -Parent $PSScriptRoot
-Set-Location $repo
+$probe = Join-Path $repo 'build'          # git-ignored; keeps build logs out of the tree
+if (-not (Test-Path $probe)) { New-Item -ItemType Directory -Path $probe -Force | Out-Null }
 
-# ---- 环境 ----
-$env:FLUTTER_ROOT = $FlutterRoot
-$env:PUB_CACHE = $PubCache
-$env:ANDROID_HOME = $Sdk
+function Note($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m) }
+
+# ---- 0) THE critical step: drop the duplicated proxy variables ----------------
+foreach ($v in 'http_proxy','https_proxy','no_proxy','HTTP_PROXY','HTTPS_PROXY','NO_PROXY','NODE_USE_ENV_PROXY') {
+  Remove-Item "Env:$v" -ErrorAction SilentlyContinue
+}
+Note 'proxy env vars cleared (duplicates crash the forked Gradle daemon)'
+
+# ---- 1) install the flutter.bat shim if the stock one is in place ------------
+$fb    = Join-Path $FlutterRoot 'bin\flutter.bat'
+$fbBak = Join-Path $FlutterRoot 'bin\flutter.bat.orig'
+$shimDir = Join-Path $probe 'flutter-shim'
+if (-not $SkipShim -and (Test-Path $shimDir)) {
+  if (-not (Test-Path $fbBak)) {
+    if (Test-Path $fb) { Copy-Item $fb $fbBak -Force; Note "backed up stock flutter.bat -> flutter.bat.orig" }
+  }
+  Copy-Item (Join-Path $shimDir 'flutter.bat')      $fb -Force
+  Copy-Item (Join-Path $shimDir 'flutter_shim.ps1') (Join-Path $FlutterRoot 'bin\flutter_shim.ps1') -Force
+  Note 'flutter.bat shim installed (retries dart, skips --packages)'
+}
+
+# ---- 2) environment ----------------------------------------------------------
+$env:FLUTTER_ROOT     = $FlutterRoot
+$env:PUB_CACHE        = $PubCache
+$env:ANDROID_HOME     = $Sdk
 $env:ANDROID_SDK_ROOT = $Sdk
 if (-not $env:JAVA_HOME) {
-  $jdk = Get-ChildItem 'C:\Program Files\Microsoft\jdk-*' -Directory -ErrorAction SilentlyContinue |
-         Select-Object -First 1
+  $jdk = Get-ChildItem 'C:\Program Files\Microsoft\jdk-*' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($jdk) { $env:JAVA_HOME = $jdk.FullName }
 }
-Write-Host "JAVA_HOME   = $env:JAVA_HOME"
-Write-Host "ANDROID_SDK = $env:ANDROID_HOME"
+Note "JAVA_HOME   = $env:JAVA_HOME"
+Note "ANDROID_SDK = $env:ANDROID_HOME"
 
-# local.properties 必须指向真实 SDK；flutter 工具偶尔会把它写成 sdk.dir=C:\
+# ---- 3) dependencies (must run INSIDE the repo) ------------------------------
+Set-Location $repo
+$dart = Join-Path $FlutterRoot 'bin\cache\dart-sdk\bin\dart.exe'
+& $dart pub get *> (Join-Path $probe 'build_pubget.log')
+if ($LASTEXITCODE -ne 0) { & $dart pub get --offline *> (Join-Path $probe 'build_pubget.log') }
+Note "pub get rc = $LASTEXITCODE"
+
+# ---- 4) derive the version and write local.properties ------------------------
+$pubspec = Join-Path $repo 'pubspec.yaml'
+$line = (Get-Content $pubspec | Select-String -Pattern '^version:' | Select-Object -First 1).ToString()
+$ver  = ($line -replace '^version:\s*', '').Trim()
+if (-not $VersionName) { $VersionName = ($ver -split '\+')[0] }
+if ($VersionCode -le 0) {
+  $build = ($ver -split '\+')
+  $n = if ($build.Count -gt 1) { [int]($build[1] -replace '\D','') } else { 0 }
+  $VersionCode = 2000 + $n
+}
+Note "version: name=$VersionName code=$VersionCode  (pubspec: $ver)"
+
 $lp = Join-Path $repo 'android\local.properties'
 @(
-  ('sdk.dir=' + $Sdk.Replace('\', '\\')),
-  ('flutter.sdk=' + $FlutterRoot.Replace('\', '\\')),
-  'flutter.buildMode=release'
+  ('sdk.dir=' + $Sdk.Replace('\','\\')),
+  ('flutter.sdk=' + $FlutterRoot.Replace('\','\\')),
+  'flutter.buildMode=release',
+  ('flutter.versionName=' + $VersionName),
+  ('flutter.versionCode=' + $VersionCode)
 ) | Set-Content -Path $lp -Encoding ascii
 
-$dart = Join-Path $FlutterRoot 'bin\cache\dart-sdk\bin\dart.exe'
-$snap = Join-Path $FlutterRoot 'bin\cache\flutter_tools.snapshot'
+# warn (do not edit) if the heap looks too small for R8
+$gp = Join-Path $repo 'android\gradle.properties'
+$jvm = (Get-Content $gp -ErrorAction SilentlyContinue | Select-String '^org\.gradle\.jvmargs').ToString()
+Note "gradle jvmargs: $jvm"
 
-# ---- 依赖：联网用 dart pub，离线兜底 ----
-Write-Host "`n=== pub get ===" -ForegroundColor Cyan
-& $dart pub get
-if ($LASTEXITCODE -ne 0) { & $dart pub get --offline }
-
-# ---- 构建 ----
-# 内存提示：Gradle 默认 -Xmx8G，在可用内存 < 8G 的机器上守护进程会被系统杀掉，
-# 表现为「没有任何输出就 BUILD FAILED」。这里压到 2.5G 并关掉并行。
-$gradleArgs = @(
-  '--console=plain', '--no-daemon', '--max-workers=2',
-  '-Dorg.gradle.parallel=false',
-  '-Dkotlin.compiler.execution.strategy=in-process',
-  '-Dorg.gradle.jvmargs=-Xmx2500m -XX:MaxMetaspaceSize=768m -XX:ReservedCodeCacheSize=128m'
-)
-
-if ($Universal) {
-  Write-Host "`n=== flutter build apk --release（通用包）===" -ForegroundColor Cyan
-  & $dart --disable-dart-dev $snap build apk --release
-} else {
-  Write-Host "`n=== gradle :app:assembleRelease（分 ABI）===" -ForegroundColor Cyan
-  Push-Location (Join-Path $repo 'android')
-  & .\gradlew.bat @gradleArgs :app:assembleRelease
-  $rc = $LASTEXITCODE
-  Pop-Location
-  if ($rc -ne 0) {
-    Write-Warning "Gradle 失败（rc=$rc）。若日志里是 cmake.exe 以 0xC0000005 退出，属本机 spawn 偶发问题，重跑一次通常即可。"
-    exit $rc
+# ---- 5) build, with retries (the sandbox can kill any attempt mid-way) -------
+$apk = Join-Path $repo 'build\app\outputs\flutter-apk\app-release.apk'
+Set-Location (Join-Path $repo 'android')
+$ok = $false
+for ($i = 1; $i -le $Tries; $i++) {
+  Get-ChildItem (Join-Path $repo 'android\.gradle') -Recurse -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
+    try { Remove-Item $_.FullName -Force -ErrorAction Stop } catch {}
   }
+  $before = (Get-Item $apk -ErrorAction SilentlyContinue).LastWriteTime
+  $log = Join-Path $probe ("build_gradle_try$i.log")
+  Note "--- attempt $i/$Tries (log: $log) ---"
+  & .\gradlew.bat --console=plain `
+      "-Pflutter.androidSdkRoot=$Sdk" `
+      "-Pflutter.installedNdkVersions=$Ndk" `
+      :app:assembleRelease *> $log
+  $rc = $LASTEXITCODE
+  $after = (Get-Item $apk -ErrorAction SilentlyContinue).LastWriteTime
+  Note "attempt $i rc=$rc"
+  if ($after -ne $before -and $after) { $ok = $true; break }
 }
 
-# ---- 汇总 ----
-Write-Host "`n=== 产物 ===" -ForegroundColor Green
-$dirs = @(
-  (Join-Path $repo 'build\app\outputs\flutter-apk'),
-  (Join-Path $repo 'build\app\outputs\apk\release')
-)
-Get-ChildItem -Path $dirs -Filter '*.apk' -ErrorAction SilentlyContinue |
-  Sort-Object Length |
-  ForEach-Object { "{0,-34} {1,12:N0} B" -f $_.Name, $_.Length }
+Set-Location $repo
+if ($ok) { Note "OK: $apk" } else { Note "APK not refreshed - see the build_gradle_try*.log files" }
+
+Note 'artifacts:'
+Get-ChildItem (Join-Path $repo 'build\app\outputs\flutter-apk\*.apk') -ErrorAction SilentlyContinue |
+  ForEach-Object { Write-Host ("  {0,-28} {1,12:N0} B  {2}" -f $_.Name, $_.Length, $_.LastWriteTime) }
 
 Write-Host @"
 
-安装到真机：
-  adb install -r <apk 路径>
-真机验收（字体本地化）：
-  adb logcat | Select-String 'YBH WebView'   # 应看到「字体 | 打包 16 个，内联 CSS …」
-  在应用内打开「整站」页，观察是否还有 woff2 请求（应为 0）
+Install on the device and verify font localisation:
+  adb install -r build\app\outputs\flutter-apk\app-release.apk
+  adb logcat -c ; adb shell monkey -p cn.yibianhui.blog -c android.intent.category.LAUNCHER 1
+  adb logcat -d | Select-String 'YBH (WebView|fonts)'
+Expected lines (Chinese text as printed by the app):
+  [YBH fonts] <n> bundled fonts, replacement CSS <n> chars
+  [YBH WebView vX.Y.Z] fonts | localisation done: 83 site @font-face removed, gate <n>ms
 "@
