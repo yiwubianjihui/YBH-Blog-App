@@ -5,9 +5,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../app_config.dart';
 import '../data/blog_api.dart';
+import '../data/notification_feed.dart';
 import '../data/update_checker.dart';
 import '../ui/category_order_page.dart';
 import '../ui/home_tab.dart';
+import '../ui/notification_center_page.dart';
 import '../ui/profile_tab.dart';
 import '../ui/posts_tab.dart';
 import '../ui/search_page.dart';
@@ -52,6 +54,66 @@ class _HomeShellPageState extends State<HomeShellPage> {
   void initState() {
     super.initState();
     _autoCheckUpdate();
+    _refreshUnread();
+  }
+
+  /// 未读消息数（AppBar 小红点用）。失败静默为 0。
+  final ValueNotifier<int> _unread = ValueNotifier<int>(0);
+
+  Future<void> _refreshUnread() async {
+    final n = await NotificationFeed.unreadCount();
+    if (mounted) _unread.value = n;
+  }
+
+  /// 打开消息中心，回来时刷新红点。
+  Future<void> _openNoticeCenter() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const NotificationCenterPage()),
+    );
+    await _refreshUnread();
+  }
+
+  /// 首页/文章页 AppBar 右上角的铃铛（带未读红点）。
+  Widget _noticeAction() {
+    return ListenableBuilder(
+      listenable: _unread,
+      builder: (context, child) {
+        final n = _unread.value;
+        return IconButton(
+          tooltip: n > 0 ? '消息中心（$n 条未读）' : '消息中心',
+          onPressed: _openNoticeCenter,
+          icon: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              const Icon(Icons.notifications_none_rounded),
+              if (n > 0)
+                Positioned(
+                  right: -2,
+                  top: -2,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    constraints: const BoxConstraints(minWidth: 15),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.error,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      n > 99 ? '99+' : '$n',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        height: 1.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   /// 启动后延迟静默检查一次更新：有新版弹窗提醒，失败不打扰用户。
@@ -69,6 +131,7 @@ class _HomeShellPageState extends State<HomeShellPage> {
 
   @override
   void dispose() {
+    _unread.dispose();
     _webUi.dispose();
     super.dispose();
   }
@@ -240,12 +303,14 @@ class _HomeShellPageState extends State<HomeShellPage> {
         return AppBar(
           title: const _AppTitle(title: AppConfig.appName),
           bottom: progressBar,
+          actions: [_noticeAction()],
         );
       case 1:
         return AppBar(
           title: const _AppTitle(title: '文章'),
           bottom: progressBar,
           actions: [
+            _noticeAction(),
             IconButton(
               tooltip: '搜索文章',
               onPressed: () {

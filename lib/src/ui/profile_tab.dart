@@ -10,6 +10,7 @@ import '../data/category_order.dart';
 import '../data/update_checker.dart';
 import '../data/wp_auth.dart';
 import 'editor_page.dart';
+import 'notification_center_page.dart';
 import 'post_card.dart';
 import 'post_detail_page.dart';
 
@@ -325,6 +326,18 @@ class _ProfileTabState extends State<ProfileTab> {
                   ShareParams(
                     text: '推荐这个博客客户端给你：${AppConfig.appName}\n站点：${AppConfig.blogUrl}',
                     uri: Uri.parse(AppConfig.blogUrl),
+                  ),
+                ),
+              ),
+              const Divider(height: 1, indent: 56),
+              ListTile(
+                leading: const Icon(Icons.notifications_none_rounded),
+                title: const Text('消息中心'),
+                subtitle: const Text('新文章与投稿进度，随时回看'),
+                trailing: const Icon(Icons.chevron_right_outlined, size: 20),
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const NotificationCenterPage(),
                   ),
                 ),
               ),
