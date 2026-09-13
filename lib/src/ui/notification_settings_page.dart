@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/notification_background.dart';
 import '../data/notification_prefs.dart';
 import '../data/notification_service.dart';
+import '../data/power_guard.dart';
 
 /// 通知设置页：总开关、检查频率、提醒类型。
 class NotificationSettingsPage extends StatefulWidget {
@@ -18,6 +19,9 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   bool _loading = true;
   bool _testing = false;
 
+  /// 是否已在系统「电池优化白名单」里；null = 无法判定（非 Android / 查询失败）。
+  bool? _ignoringBattery;
+
   @override
   void initState() {
     super.initState();
@@ -26,11 +30,32 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
 
   Future<void> _load() async {
     final prefs = await NotificationPrefs.load();
+    final ignoring = await PowerGuard.isIgnoringBatteryOptimizations();
     if (!mounted) return;
     setState(() {
       _prefs = prefs;
+      _ignoringBattery = ignoring;
       _loading = false;
     });
+  }
+
+  /// 申请加入电池优化白名单；回来后再查一次状态。
+  Future<void> _requestBatteryWhitelist() async {
+    final opened = await PowerGuard.requestIgnoreBatteryOptimizations();
+    if (!mounted) return;
+    if (!opened) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('这台设备不支持一键跳转，请到「设置 → 电池 → 应用启动管理」里手动允许后台运行'),
+        ),
+      );
+      return;
+    }
+    // 用户可能在系统界面里点了「允许」或返回，稍后再查一次。
+    await Future<void>.delayed(const Duration(seconds: 2));
+    final ignoring = await PowerGuard.isIgnoringBatteryOptimizations();
+    if (!mounted) return;
+    setState(() => _ignoringBattery = ignoring);
   }
 
   Future<void> _save(NotificationPrefs next) async {
@@ -71,6 +96,34 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
             onChanged: (v) => _save(_prefs.copyWith(enabled: v)),
           ),
           if (_prefs.enabled) ...[
+            const Divider(height: 1),
+            // ---- 后台可达性（T30）----
+            // 国产 ROM（尤其华为）会把未加白名单的应用在后台冻结，WorkManager 停摆，
+            // 表现就是「权限都给了却收不到通知」。这里做检测 + 一键引导。
+            ListTile(
+              contentPadding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+              leading: Icon(
+                _ignoringBattery == true
+                    ? Icons.battery_saver_outlined
+                    : Icons.battery_alert_outlined,
+                color: _ignoringBattery == true ? colorScheme.primary : colorScheme.error,
+              ),
+              title: const Text('后台运行白名单'),
+              subtitle: Text(
+                _ignoringBattery == true
+                    ? '已加入电池优化白名单，后台提醒可以正常送达'
+                    : _ignoringBattery == null
+                        ? '无法检测（非 Android 设备）。若收不到通知，请手动允许后台运行'
+                        : '未加入。华为等机型会冻结后台任务，导致收不到提醒',
+                style: const TextStyle(fontSize: 12.5, height: 1.5),
+              ),
+              trailing: _ignoringBattery == true
+                  ? null
+                  : TextButton(
+                      onPressed: _requestBatteryWhitelist,
+                      child: const Text('去设置'),
+                    ),
+            ),
             const Divider(height: 1),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),

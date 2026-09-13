@@ -8,6 +8,8 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import 'app_config.dart';
+import 'data/embedded_fonts.dart';
+import 'data/update_checker.dart';
 import 'data/wp_auth.dart';
 import 'shell/webview_ui_state.dart';
 
@@ -18,6 +20,8 @@ import 'shell/webview_ui_state.dart';
 /// - 加载进度与错误页通过 [WebViewUiState] 上报给外壳
 /// - 站外链接自动转交系统浏览器，站内链接留在应用内
 /// - 页面加载完成后注入“性能模式”样式，关闭站点重特效提升旧设备滚动流畅度
+/// - **网页字体本地化（T30）**：站点一次首页加载要拉 19.2 MB 中文字体；
+///   打包进 APK 的字体以 `data:` URI 内联顶掉站点规则，页面一个字体请求都不发
 /// - **登录态同步**：App 在「我的」页登录后，WebView 用内存中的最新凭据
 ///   自动完成 wp-login 表单登录（服务端只信任真实浏览器指纹的登录，
 ///   应用内 HttpClient 拿到的会话无效，故必须由 WebView 自身登录）；
@@ -216,6 +220,9 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   late final WebViewController _controller;
   bool _androidConfigured = false;
 
+  /// 诊断日志前缀里的 App 版本号（T30：便于按版本区分线上问题）。
+  String _appVersion = '?';
+
   /// 已应用的 WebView 底色是否为深色（跟随明暗主题，避免暗色下闪白）。
   bool? _darkBackground;
 
@@ -231,13 +238,19 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   @override
   void initState() {
     super.initState();
+    // T30：先把打包字体读成 base64 并拼出替代 @font-face（异步、失败静默），
+    // 再创建 WebView —— 首帧注入脚本时 webviewScript 已就绪。
+    EmbeddedFonts.instance.prepare();
+    UpdateChecker.currentVersion().then((v) {
+      if (mounted) _appVersion = v;
+    });
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..addJavaScriptChannel(
         'YbhDiag',
         onMessageReceived: (JavaScriptMessage message) {
-          // 页面侧诊断回报（JS 报错 / 资源加载失败），仅出现问题时才有输出。
-          debugPrint('[YBH WebView] ${message.message}');
+          // 页面侧诊断回报（JS 报错 / 资源加载失败 / 字体本地化），仅出现问题时才有输出。
+          debugPrint('[YBH WebView v$_appVersion] ${message.message}');
         },
       )
       ..setBackgroundColor(const Color(0xFFF5F6F8))
@@ -294,6 +307,10 @@ class BlogWebViewState extends State<BlogWebViewPage> {
             }
             // 性能模式 + 兜底移除站点载入遮罩（早期已注入，这里兜最后一刀）。
             _injectPageScript();
+            // 字体本地化状态回报（打包文件数 / 内联 CSS 体量）。
+            final fonts = EmbeddedFonts.instance;
+            debugPrint('[YBH WebView v$_appVersion] 字体 | 打包 ${fonts.fileCount} 个，'
+                '内联 CSS ${fonts.cssBytes} 字符，就绪=${fonts.isReady}');
           },
           onWebResourceError: (WebResourceError error) {
             // 只对主框架错误显示错误页，避免图片等子资源失败误报。
@@ -387,6 +404,17 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   /// 脚本自带去重，后续进度点与 onPageFinished 会再补一次。
   void _injectPageScript() {
     _controller.runJavaScript(_pageScript).catchError((Object _) {});
+    _injectFontScript();
+  }
+
+  /// T30：注入「网页字体本地化」脚本（闸门 → 改写 CSSOM → 放开闸门）。
+  ///
+  /// 与 [_injectPageScript] 一样在导航早期与多个进度点重复注入；
+  /// 脚本以 `window.__ybhFonts` 去重，重复调用只是再 kick 一次。
+  void _injectFontScript() {
+    final js = EmbeddedFonts.instance.webviewScript;
+    if (js.isEmpty) return;   // 服务没起来（例如平台不支持）→ 退回站点原字体
+    _controller.runJavaScript(js).catchError((Object _) {});
   }
 
   @override

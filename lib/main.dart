@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'src/app_config.dart';
 import 'src/blog_host.dart';
+import 'src/data/embedded_fonts.dart';
 import 'src/data/notification_background.dart';
 import 'src/data/notification_checker.dart';
 import 'src/data/notification_prefs.dart';
@@ -14,6 +15,9 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   // 通知：初始化 + 注册后台周期任务（在 runApp 之前，纯异步无 UI 依赖）。
   _initNotifications();
+  // 网页字体本地化：把打包字体读成 base64 并拼替代 CSS（T30）。
+  // 提前启动，等用户切到「整站」页时早已就绪；失败静默，退回站点原字体。
+  EmbeddedFonts.instance.prepare();
   runApp(const YbhApp());
 }
 

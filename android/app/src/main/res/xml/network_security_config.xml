@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  YBH · 网络安全策略（收口）
+
+  全站都是 HTTPS，App 自身也只走 HTTPS，因此这里把**明文流量整体关掉**：
+    · base-config cleartextTrafficPermitted="false" ⇒ 除下述例外外不允许 http://
+  这样即便日后有人误配一个 http 端点，也会立刻暴露而不是静默降级。
+
+  历史备注（T30）：曾尝试用 127.0.0.1 上的本机 HTTP 服务给 WebView 供字体，
+  已放弃 —— Chromium 的 Local Network Access 策略会直接拒绝「公网源 → 回环」
+  的请求（服务端一个包都收不到），加任何 CORS 头都无效。
+  现行方案改用 data: URI 内联字体，不产生任何请求。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

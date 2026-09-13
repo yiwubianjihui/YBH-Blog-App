@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.0.13+13
+version: 0.0.14+14
 
 environment:
   sdk: ^3.13.1
@@ -77,6 +77,14 @@ flutter:
 
   assets:
     - assets/icon/app_icon.png
+    # T30：打包进安装包的网页字体（含 manifest.json）。
+    # 站点 CSS 里的 url(…/ybh-fonts/<rel>) 由 App 改写为
+    # http://127.0.0.1:<port>/f/<rel>，由 lib/src/data/embedded_fonts.dart 供给。
+    # 注意 Flutter 的目录声明**不含子目录**，每个子目录都要单独列出。
+    - assets/fonts/
+    - assets/fonts/slice/
+    - assets/fonts/klee-one/
+    - assets/fonts/fontawesome/webfonts/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
