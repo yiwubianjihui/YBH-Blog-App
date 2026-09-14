@@ -69,6 +69,10 @@ class EmbeddedFonts {
   bool get isReady => _loaded && _css.isNotEmpty;
   int get fileCount => _fileCount;
 
+  /// 替代用 @font-face CSS（data: URI）。阅读器 / 编辑器把这段直接内联进
+  /// 本地 HTML 的 `<head>`（站点 CSS 里的 @font-face 已被 WebStyle 剔除）。
+  String get css => _css;
+
   /// 生成好的 CSS 文本长度（诊断用）。
   int get cssBytes => _css.length;
 

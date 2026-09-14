@@ -441,7 +441,14 @@ class WpAuth {
 
   /// 发布 / 投稿 / 存草稿。
   ///
-  /// [content] 为纯文本（按空行分段，自动包 `<p>`）；
+  /// [content] 为正文。[contentIsHtml] 为 true 时按 **HTML 原样提交**
+  /// （富文本编辑器走这条）；为 false 时按纯文本处理：按空行分段、转义后包 `<p>`
+  /// （保留给只输入纯文本的调用方）。
+  ///
+  /// 服务端会按当前账号能力做 `wp_kses_post` 过滤：没有 `unfiltered_html`
+  /// 的账号（投稿者/作者）无法写入脚本等危险标签，但 `<p> <h2> <strong> <em>
+  /// <ul> <ol> <blockquote> <pre> <code> <a> <img> <figure>` 这些正常排版标签都会保留。
+  ///
   /// [status] 取 'publish'、'draft' 或 'pending'（待审核）。
   ///
   /// **投稿者（contributor）没有 `publish_posts` 权限**，直接发布会被服务端
@@ -452,6 +459,7 @@ class WpAuth {
   Future<PublishResult> publishPost({
     required String title,
     required String content,
+    bool contentIsHtml = false,
     String status = 'publish',
     List<int>? categories,
   }) async {
@@ -466,6 +474,7 @@ class WpAuth {
     final first = await _createPost(
       title: title,
       content: content,
+      contentIsHtml: contentIsHtml,
       status: effective,
       categories: categories,
     );
@@ -478,6 +487,7 @@ class WpAuth {
       final retry = await _createPost(
         title: title,
         content: content,
+        contentIsHtml: contentIsHtml,
         status: 'pending',
         categories: categories,
       );
@@ -491,11 +501,12 @@ class WpAuth {
     required String title,
     required String content,
     required String status,
+    bool contentIsHtml = false,
     List<int>? categories,
   }) async {
     final body = {
       'title': title,
-      'content': _wrapParagraphs(content),
+      'content': contentIsHtml ? content : _wrapParagraphs(content),
       'status': status,
       if (categories != null && categories.isNotEmpty) 'categories': categories,
     };
@@ -534,6 +545,53 @@ class WpAuth {
       _serverMessage(json, response.statusCode),
       statusCode: response.statusCode,
     );
+  }
+
+  /// 上传图片到媒体库，返回可插入正文的图片地址；失败返回 null。
+  ///
+  /// WordPress 的 `/wp/v2/media` 支持「原始字节 + `Content-Disposition` 文件名」，
+  /// 因此不必构造 multipart。需要账号具备 `upload_files` 能力
+  /// （投稿者默认没有，主题侧已放开：`YBH_ALLOW_CONTRIBUTOR_UPLOAD`）。
+  Future<String?> uploadMedia({
+    required List<int> bytes,
+    required String filename,
+    String? mimeType,
+  }) async {
+    if (!isLoggedIn) return null;
+    final mime = mimeType ?? _guessMime(filename);
+    try {
+      final r = await http
+          .post(
+            Uri.parse('${AppConfig.apiBase}/media'),
+            headers: {
+              ...authHeaders,
+              'Content-Type': mime,
+              'Content-Disposition': 'attachment; filename="$filename"',
+            },
+            body: bytes,
+          )
+          .timeout(_timeout);
+      if (r.statusCode != 201 && r.statusCode != 200) {
+        final body = utf8.decode(r.bodyBytes, allowMalformed: true);
+        debugPrint('[wp_auth] 图片上传失败 HTTP ${r.statusCode}: '
+            '${body.length > 180 ? body.substring(0, 180) : body}');
+        return null;
+      }
+      final json = jsonDecode(utf8.decode(r.bodyBytes));
+      if (json is Map<String, dynamic>) return json['source_url'] as String?;
+    } catch (e) {
+      debugPrint('[wp_auth] 图片上传异常: $e');
+    }
+    return null;
+  }
+
+  static String _guessMime(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    return 'image/jpeg';
   }
 
   /// 把服务端返回的错误转成用户能看懂的话；带常见 403 的补充说明。
