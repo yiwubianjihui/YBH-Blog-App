@@ -181,9 +181,17 @@ body {
 ''';
 
   /// 阅读器 / 编辑器的「外壳」样式：只放我们自己需要的那几件事
-  /// （页边距、图片自适应、代码块复制按钮、深色底），排版交给站点 CSS。
+  /// （页边距、滚动、图片自适应、代码块复制按钮、深色底），排版交给站点 CSS。
   static const String shellCss = r'''
 html, body { margin: 0; padding: 0; }
+/* ===== 恢复纵向滚动（真机验收抓出的 bug）=====
+   站点 `inc/decorate.php` 在开启「预加载动画」时会随内联样式输出
+       html { overflow-y: hidden; }
+   它依赖主题的预载 JS 在加载结束把这条规则撤掉。而阅读器/编辑器**只内联了 CSS、
+   没有那份 JS** ⇒ 文档被永久锁死，正文完全不能滚动（真机上表现为「页面纹丝不动」）。
+   本站 `iro_opt('preload_animation')` 为开，所以线上页面里确实带着这条规则。
+   这里显式恢复：shell 样式排在站点 CSS **之后**，同特指度后声明者胜。 */
+html { overflow-y: auto; }
 html { -webkit-text-size-adjust: 100%; -webkit-font-smoothing: antialiased; }
 body {
   background: #fff;

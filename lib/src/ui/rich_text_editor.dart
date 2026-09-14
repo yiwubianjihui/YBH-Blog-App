@@ -223,10 +223,13 @@ html, body { height: 100%; }
 body { background: #fff; }
 body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
 .ybh-shell { padding: 14px 18px 140px; }
-#editor { outline: none; min-height: 60vh; }
-#editor:empty::before,
-#editor > p:only-child:empty::before {
+#editor { outline: none; min-height: 60vh; position: relative; }
+/* 占位提示：由 JS 按内容有无挂 .is-empty 类来控制（见 refreshEmpty 的注释） */
+#editor.is-empty::before {
   content: $ph;
+  position: absolute;
+  top: 0;
+  left: 0;
   color: #9aa0a6;
   pointer-events: none;
 }
@@ -264,6 +267,15 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
   var savedRange = null;
   var fnSeq = 0;
 
+  // 空文档时给 #editor 挂 .is-empty，用于显示占位提示。
+  // 为什么不用 CSS 的 :empty —— 初始文档是 `<p><br></p>`，`<br>` 也算子节点，
+  // `p:empty` / `#editor:empty` 都不成立，占位提示就永远不会出现（真机验收发现）。
+  function refreshEmpty() {
+    var hasText = (ed.innerText || '').trim().length > 0;
+    var hasBlock = !!ed.querySelector('img,figure,pre,iframe,video,table,hr,.ybh-fn');
+    ed.classList.toggle('is-empty', !hasText && !hasBlock);
+  }
+
   function post() {
     var block = '';
     try {
@@ -294,6 +306,7 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
       block: block, chars: text.length, fn: inFn
     };
     try { YbhEditorState.postMessage(JSON.stringify(st)); } catch (e) {}
+    try { refreshEmpty(); } catch (e) {}
   }
   function q(c) { try { return document.queryCommandState(c); } catch (e) { return false; } }
   function sel() { try { return window.getSelection(); } catch (e) { return null; } }

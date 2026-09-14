@@ -301,6 +301,10 @@ class _EditorPageState extends State<EditorPage> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    // 键盘弹起时可用高度只剩 ~260 逻辑 px，而顶部的权限提示 + 分类选择就要占 ~170 px，
+    // 真机实测结果是**工具栏被挤出屏幕、编辑区只剩一条缝**（字打着却看不见）。
+    // 所以键盘一弹起就换成紧凑布局：提示压成一行、分类行暂时收起，把高度全让给编辑区。
+    final keyboardUp = MediaQuery.of(context).viewInsets.bottom > 0;
 
     return PopScope(
       canPop: !_dirty || _submitted,
@@ -339,13 +343,44 @@ class _EditorPageState extends State<EditorPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              padding: EdgeInsets.fromLTRB(16, keyboardUp ? 4 : 10, 16, 0),
               child: _PermissionBanner(
-                user: _me,
+                // 会话已失效时就不要再显示「当前身份：投稿者」了，否则与下面的
+                // 过期提示自相矛盾
+                user: wpAuth.isLoggedIn ? _me : null,
                 loading: _loadingCapabilities,
                 onRetry: _loadCapabilities,
+                compact: keyboardUp,
               ),
             ),
+            // 登录态已失效时给出明确出口：不然用户只会在提交时吃到一句英文报错
+            if (!wpAuth.isLoggedIn)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.lock_clock,
+                        size: 16, color: colorScheme.onErrorContainer),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '登录状态已过期，请回到「我的」重新登录后再投稿',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.4,
+                          color: colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
               child: TextField(
@@ -360,14 +395,16 @@ class _EditorPageState extends State<EditorPage> {
                 textInputAction: TextInputAction.next,
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: _CategoryRow(
-                categories: _categories,
-                value: _categoryId,
-                onChanged: (v) => setState(() => _categoryId = v),
+            // 分类是「发文前设一次」的属性，打字时没必要占着一行 —— 键盘收起后自动回来
+            if (!keyboardUp)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: _CategoryRow(
+                  categories: _categories,
+                  value: _categoryId,
+                  onChanged: (v) => setState(() => _categoryId = v),
+                ),
               ),
-            ),
             const Divider(height: 1),
             _Toolbar(
               controller: _editor,
@@ -816,11 +853,15 @@ class _PermissionBanner extends StatelessWidget {
     required this.user,
     required this.loading,
     required this.onRetry,
+    this.compact = false,
   });
 
   final WpUser? user;
   final bool loading;
   final VoidCallback onRetry;
+
+  /// 键盘弹起时为 true：压成一行，把高度让给编辑区（见 [EditorPage.build] 的说明）。
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -843,14 +884,41 @@ class _PermissionBanner extends StatelessWidget {
     if (canPublish) {
       if (role.isEmpty) return const SizedBox.shrink();
       return Padding(
-        padding: const EdgeInsets.only(bottom: 8),
+        padding: EdgeInsets.only(bottom: compact ? 2 : 8),
         child: Row(
           children: [
             Icon(Icons.verified_outlined, size: 15, color: colorScheme.primary),
             const SizedBox(width: 6),
-            Text(
-              '当前身份：$role · 可直接发布',
-              style: TextStyle(fontSize: 12.5, color: colorScheme.outline),
+            Expanded(
+              child: Text(
+                compact ? '$role · 可直接发布' : '当前身份：$role · 可直接发布',
+                style: TextStyle(fontSize: 12.5, color: colorScheme.outline),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 紧凑态：只留一行「身份 · 去向」，不占地方
+    if (compact) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: Row(
+          children: [
+            Icon(Icons.info_outline,
+                size: 14, color: colorScheme.onTertiaryContainer),
+            const SizedBox(width: 5),
+            Expanded(
+              child: Text(
+                '${role.isEmpty ? '投稿者' : role} · 提交后进入待审核队列',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onTertiaryContainer,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),

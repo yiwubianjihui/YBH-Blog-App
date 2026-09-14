@@ -388,6 +388,33 @@ class WpAuth {
     return me;
   }
 
+  /// 服务端返回的是不是「登录态已失效」（JWT 过期 / 令牌无效）。
+  ///
+  /// 站点用的是 `jwt-authentication-for-wp-rest-api`，令牌有有效期。过期之后
+  /// **所有**写操作都会以 `{"code":"jwt_auth_expired_token","message":"Expired token"}`
+  /// 被拒；而这句英文原文直接甩给用户是没法理解的（真机验收时实际撞到过）。
+  static bool isSessionExpiredMessage(String? msg) {
+    if (msg == null) return false;
+    final m = msg.toLowerCase();
+    if (m.contains('expired token')) return true;
+    if (m.contains('invalid token')) return true;
+    if (m.contains('jwt_auth_')) return true;
+    if (m.contains('token') && (m.contains('expire') || m.contains('过期'))) {
+      return true;
+    }
+    return false;
+  }
+
+  /// 给「登录态失效」的统一文案（同时清掉本地会话，让 UI 回到未登录态）。
+  static const String sessionExpiredHint = '登录状态已过期，请回到「我的」重新登录后再试';
+
+  /// 若服务端报的是登录态失效，清掉本地会话并返回 true。
+  Future<bool> _handleIfSessionExpired(String? serverMessage) async {
+    if (!isSessionExpiredMessage(serverMessage)) return false;
+    await logout();
+    return true;
+  }
+
   Future<void> logout() async {
     _token = null;
     _user = null;
@@ -541,6 +568,8 @@ class WpAuth {
         link: (link == null || link.isEmpty) ? AppConfig.blogUrl : link,
       );
     }
+    // 令牌过期时顺手清掉本地会话，让「我的」页回到未登录态，用户才知道要重新登录
+    await _handleIfSessionExpired(json?['message'] as String?);
     return PublishResult.failure(
       _serverMessage(json, response.statusCode),
       statusCode: response.statusCode,
@@ -575,6 +604,13 @@ class WpAuth {
         final body = utf8.decode(r.bodyBytes, allowMalformed: true);
         debugPrint('[wp_auth] 图片上传失败 HTTP ${r.statusCode}: '
             '${body.length > 180 ? body.substring(0, 180) : body}');
+        // 令牌过期时同样要清会话，否则用户会一直以为还登着
+        Map<String, dynamic>? j;
+        try {
+          final d = jsonDecode(body);
+          if (d is Map<String, dynamic>) j = d;
+        } catch (_) {}
+        await _handleIfSessionExpired(j?['message'] as String?);
         return null;
       }
       final json = jsonDecode(utf8.decode(r.bodyBytes));
@@ -597,6 +633,8 @@ class WpAuth {
   /// 把服务端返回的错误转成用户能看懂的话；带常见 403 的补充说明。
   static String _serverMessage(Map<String, dynamic>? json, int code) {
     final raw = json?['message'] as String?;
+    // 登录态失效优先识别：直接把 "Expired token" 抛给用户等于没说
+    if (isSessionExpiredMessage(raw)) return sessionExpiredHint;
     final base = (raw == null || raw.trim().isEmpty)
         ? '提交失败（HTTP $code）'
         : raw.trim();
