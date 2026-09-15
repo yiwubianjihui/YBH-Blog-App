@@ -14,6 +14,7 @@ import '../ui/notification_center_page.dart';
 import '../ui/profile_tab.dart';
 import '../ui/posts_tab.dart';
 import '../ui/search_page.dart';
+import '../ui/tags_page.dart';
 import '../data/wp_auth.dart';
 import 'webview_ui_state.dart';
 import 'webview_tab.dart' if (dart.library.html) 'webview_tab_stub.dart';
@@ -365,6 +366,15 @@ class _HomeShellPageState extends State<HomeShellPage> {
                 );
               },
               icon: const Icon(Icons.search),
+            ),
+            IconButton(
+              tooltip: '按标签浏览',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const TagsPage()),
+                );
+              },
+              icon: const Icon(Icons.tag),
             ),
             IconButton(
               tooltip: '分类管理（置顶 / 隐藏 / 排序）',

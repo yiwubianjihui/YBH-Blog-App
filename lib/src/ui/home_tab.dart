@@ -11,6 +11,7 @@ import 'page_reader_page.dart';
 import 'post_card.dart';
 import 'post_detail_page.dart';
 import 'search_page.dart';
+import 'tags_page.dart';
 
 /// 首页：YBH 品牌区 + 随站点动态更新的固定链接 + 集成小工具 + 展台。
 ///
@@ -219,6 +220,13 @@ class _HomeTabState extends State<HomeTab> {
     if (url.contains('lr.yibianhui.cn')) {
       Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const LuckyPage()),
+      );
+      return;
+    }
+    // 标签页也是原生实现：用 app:// 前缀在配置里标记，避免为它单开一套 schema。
+    if (url.startsWith('app://tags')) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const TagsPage()),
       );
       return;
     }
@@ -595,6 +603,7 @@ IconData _iconFor(String name) => switch (name) {
       'bolt' => Icons.bolt_outlined,
       'widgets' => Icons.widgets_outlined,
       'star' => Icons.auto_awesome_outlined,
+      'tag' => Icons.tag,
       _ => Icons.link_outlined,
     };
 

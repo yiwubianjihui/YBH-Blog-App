@@ -9,7 +9,6 @@ import '../data/blog_api.dart';
 import '../data/category_order.dart';
 import '../data/update_checker.dart';
 import '../data/wp_auth.dart';
-import 'editor_page.dart';
 import 'notification_center_page.dart';
 import 'post_card.dart';
 import 'post_detail_page.dart';

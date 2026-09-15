@@ -255,6 +255,11 @@ class HomeConfig {
               url: 'https://www.yibianhui.cn/all-articles/',
               icon: 'article'),
           HomeLink(
+              title: '标签',
+              subtitle: '按标签翻文章',
+              url: 'app://tags',
+              icon: 'tag'),
+          HomeLink(
               title: '我要投稿',
               subtitle: '把你的作品发到 YBH',
               url: 'https://www.yibianhui.cn/submit/',

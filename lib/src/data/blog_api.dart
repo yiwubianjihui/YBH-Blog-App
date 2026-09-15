@@ -117,6 +117,7 @@ abstract final class BlogApi {
   /// （匹配标题与正文）；[page] 从 1 开始。
   static Future<PostsPage> fetchPosts({
     int? categoryId,
+    int? tagId,
     String? search,
     int page = 1,
     int perPage = 20,
@@ -129,6 +130,7 @@ abstract final class BlogApi {
         'orderby': 'date',
         'order': 'desc',
         if (categoryId != null) 'categories': '$categoryId',
+        if (tagId != null) 'tags': '$tagId',
         if (search != null && search.isNotEmpty) 'search': search,
       },
     );
@@ -195,6 +197,32 @@ abstract final class BlogApi {
         .whereType<Map<String, dynamic>>()
         .map(BlogCategory.fromJson)
         .where((c) => c.count > 0 && c.name.isNotEmpty)
+        .toList();
+  }
+
+  /// 拉取标签列表（按文章数降序）。
+  ///
+  /// 复用 [BlogCategory] 的形状：标签与分类在 WP REST 里字段完全一致
+  /// （`id` / `name` / `count`），没必要再定义一遍同构的类。
+  static Future<List<BlogCategory>> fetchTags({int perPage = 100}) async {
+    final uri = Uri.parse('${AppConfig.apiBase}/tags').replace(
+      queryParameters: {
+        'per_page': '$perPage',
+        'orderby': 'count',
+        'order': 'desc',
+        'hide_empty': '1',
+      },
+    );
+    final response = await http.get(uri).timeout(_timeout);
+    if (response.statusCode != 200) {
+      throw StateError('HTTP ${response.statusCode}');
+    }
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map<String, dynamic>>()
+        .map(BlogCategory.fromJson)
+        .where((t) => t.count > 0 && t.name.isNotEmpty)
         .toList();
   }
 }
