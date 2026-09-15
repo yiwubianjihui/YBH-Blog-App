@@ -220,6 +220,9 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   late final WebViewController _controller;
   bool _androidConfigured = false;
 
+  /// 「应用内渲染为空 → 已交给系统浏览器」的一次性闸门，避免反复弹。
+  bool _handedOff = false;
+
   /// 诊断日志前缀里的 App 版本号（T30：便于按版本区分线上问题）。
   String _appVersion = '?';
 
@@ -309,6 +312,16 @@ class BlogWebViewState extends State<BlogWebViewPage> {
             }
             // 性能模式 + 兜底移除站点载入遮罩（早期已注入，这里兜最后一刀）。
             _injectPageScript();
+            // 载入探针：把「到底加载到了什么」回报给日志，并据此判断要不要改用系统浏览器。
+            //
+            // 为什么需要它：teacher / brs 这类**独立静态子站**在应用内 WebView 里会**整页白屏**
+            // （同一地址在系统浏览器里完全正常，已用对照实验确认）。排查发现页面里的 JS
+            // 从未执行、DOM 也是空的 —— 光看截图分不清「没加载」还是「加载了但不可见」，
+            // 所以这里直接问页面自己。
+            //
+            // 处置：正文为空就把这一页交给**系统浏览器**打开。与其让用户对着一片白，
+            // 不如换个一定能显示的地方 —— 反正这些子站不需要 App 的任何注入能力。
+            await _probeAndMaybeHandOff(url);
             // 字体本地化状态回报（打包文件数 / 内联 CSS 体量）。
             final fonts = EmbeddedFonts.instance;
             debugPrint('[YBH WebView v$_appVersion] 字体 | 打包 ${fonts.fileCount} 个，'
@@ -407,11 +420,16 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   /// 既不需要这些、被注入后还会出问题 —— 实测「教师节」在 App 内**整页白屏**，
   /// 同一地址在系统浏览器里渲染完全正常（对照实验确认）。
   /// 所以只对主域注入，其它子站一律原样渲染。
-  bool _injectAllowed = true;
+  ///
+  /// ⚠️ **默认必须 false**：`onProgress`(10%) 可能**先于** `onPageStarted` 触发，
+  /// 默认 true 会让首帧那次注入带着「还不知道是哪个站点」的状态照发不误；
+  /// 脚本一旦注进去就作用于整页，后面再跳过已经来不及 ——
+  /// 实测这就是「加了域名判断、教师节却仍然白屏」的原因。
+  bool _injectAllowed = false;
 
   bool _shouldInject(String url) {
     final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
-    if (host.isEmpty) return true; // 拿不到主机名（about:blank 等）→ 保持原行为
+    if (host.isEmpty) return false; // 认不出主机名就不注入：宁可少做，不可做错
     return host == AppConfig.allowDomain ||
         host == 'www.${AppConfig.allowDomain}';
   }
@@ -447,6 +465,53 @@ class BlogWebViewState extends State<BlogWebViewPage> {
       _controller.setBackgroundColor(
         dark ? const Color(0xFF17191C) : const Color(0xFFF5F6F8),
       );
+    }
+  }
+
+  /// 载入后探测页面内容；**正文为空就改用系统浏览器打开**。
+  ///
+  /// 背景：teacher / brs 这类独立静态子站在应用内 WebView 里整页白屏
+  /// （系统浏览器里同一地址完全正常）。探针显示页面里的 JS 从未执行、DOM 为空，
+  /// 也就是说不是「内容在但不可见」，而是压根没渲染出来。
+  ///
+  /// 与其让用户对着一片白，不如把这一页交给系统浏览器 —— 这些子站本来也不需要
+  /// App 的任何注入能力（字体本地化 / 性能模式都是为主站 WordPress 主题做的）。
+  Future<void> _probeAndMaybeHandOff(String url) async {
+    Object? raw;
+    try {
+      raw = await _controller.runJavaScriptReturningResult(
+        'JSON.stringify({n:(document.body?document.body.innerHTML.length:-1),'
+        't:document.title||""})',
+      );
+    } catch (_) {
+      return; // 探针失败不动页面（例如跨源受限）
+    }
+    // WebView 在不同平台上可能回字符串或已解析对象，两种都认。
+    var text = (raw is String ? raw : raw.toString()).trim();
+    // 去掉平台可能加上的 JSON 引号包装
+    if (text.length > 1 && text.startsWith('"') && text.endsWith('"')) {
+      text = text.substring(1, text.length - 1).replaceAll(r'\"', '"');
+    }
+    debugPrint('[YBH WebView v$_appVersion] 载入探针 | $text');
+
+    final match = RegExp(r'"n":\s*(-?\d+)').firstMatch(text);
+    final bodyLen = match == null ? -1 : (int.tryParse(match.group(1)!) ?? -1);
+    // 只对**站内子站**做这件事；主站与站外链接保持原行为。
+    if (bodyLen < 0 || bodyLen > 200) return;
+    if (_shouldInject(url)) return; // 主站不在此列（主站的注入与渲染都正常）
+
+    debugPrint('[YBH WebView v$_appVersion] 应用内渲染为空（body $bodyLen 字节）'
+        '→ 改用系统浏览器打开：$url');
+    await _handOffToBrowser(url);
+  }
+
+  Future<void> _handOffToBrowser(String url) async {
+    if (_handedOff) return; // 只交一次，避免来回弹
+    _handedOff = true;
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {
+      // 没有可用浏览器就留在原地。
     }
   }
 

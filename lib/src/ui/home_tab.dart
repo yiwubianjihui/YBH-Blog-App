@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_config.dart';
 import '../data/blog_api.dart';
@@ -230,11 +231,30 @@ class _HomeTabState extends State<HomeTab> {
       );
       return;
     }
+    // ⚠️ 只把**主站**留在应用内 WebView。
+    //
+    // teacher / brs 这类独立子站在应用内 WebView 里会**整页白屏**：
+    // 同一地址在系统浏览器里完全正常，而 App 内不仅看不见内容，
+    // 连页面里的 JS 都不执行（载入探针抛错、字体脚本无回报）——
+    // 说明文档压根没渲染出来。真机对照实验确认，反复调注入策略也没能修好。
+    //
+    // 与其让用户对着一片白，不如交给系统浏览器：这些子站本来也不需要 App 的任何
+    // 注入能力（字体本地化 / 性能模式都是为主站 WordPress 主题做的）。
+    if (!_isMainSite(url)) {
+      launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      return;
+    }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => _InAppWebPage(title: title, url: url),
       ),
     );
+  }
+
+  /// 是否是主站（含 apex）——只有主站用应用内 WebView。
+  static bool _isMainSite(String url) {
+    final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+    return host == AppConfig.allowDomain || host == 'www.${AppConfig.allowDomain}';
   }
 
   // ------------------------------------------------------------ 固定链接
