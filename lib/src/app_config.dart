@@ -55,4 +55,19 @@ abstract final class AppConfig {
   /// 302 跳转到 wp-content/uploads/iro_gallery 下的图片，用作文章卡片封面。
   static String coverUrl(int seed) =>
       'https://www.yibianhui.cn/wp-json/sakura/v1/gallery?img=w&$seed';
+
+  /// 每次调用都换一张的随机封面（首页首屏用它当背景，点「换封面」也用它）。
+  ///
+  /// ⚠️ **必须走 REST 的 `sakura/v1/gallery`**，不要用主题自带的
+  /// `themes/SakurairoYBH/rand-cover.php`：后者的 `Location` 头里是**未做百分号编码的
+  /// 原始中文路径**（`.../img/杂图/5267.webp`），这在 HTTP 头里是非法的。
+  /// curl 容错能过，但 Dart 的 HttpClient 不接受 ⇒ `Image.network` 直接失败、
+  /// 首屏只能退成渐变兜底（真机上踩过）。REST 端点的 Location 是正确编码的。
+  static String randomCoverUrl({bool wide = true}) =>
+      'https://www.yibianhui.cn/wp-json/sakura/v1/gallery'
+      '?img=${wide ? 'w' : 'l'}&${DateTime.now().microsecondsSinceEpoch % 1000000007}';
+
+  /// 站点的「随机文章」入口（主题提供，302 跳到一篇随机文章）。
+  /// 首页工具行与「随机文章」入口都用它。
+  static const String randomPostUrl = 'https://www.yibianhui.cn/?random_post=1';
 }

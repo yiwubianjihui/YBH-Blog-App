@@ -10,6 +10,7 @@ import '../shell/webview_tab.dart' if (dart.library.html) '../shell/webview_tab_
 import 'page_reader_page.dart';
 import 'post_card.dart';
 import 'post_detail_page.dart';
+import 'search_page.dart';
 
 /// 首页：YBH 品牌区 + 随站点动态更新的固定链接 + 集成小工具 + 展台。
 ///
@@ -67,76 +68,156 @@ class _HomeTabState extends State<HomeTab> {
       onRefresh: _load,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+        // 区块顺序对齐**网站主页的组件顺序**：
+        //   首屏 → 顶栏工具 → 主入口 → 导航分组 → 文章流/统计 → 页脚
         children: [
-          _buildBrand(context),
+          _buildHero(context),
+          const SizedBox(height: 14),
+          _buildToolRow(context),
           const SizedBox(height: 18),
           _buildQuickLinks(context),
           const SizedBox(height: 18),
-          _buildTools(context),
+          _buildNavGroups(context),
           const SizedBox(height: 18),
           _buildShowcase(context),
+          const SizedBox(height: 18),
+          _buildFooter(context),
         ],
       ),
     );
   }
 
-  // ------------------------------------------------------------ 品牌区
+  // ------------------------------------------------------------ 首屏（对应网站 Hero）
 
-  Widget _buildBrand(BuildContext context) {
+  Widget _buildHero(BuildContext context) {
+    final hero = _config.hero;
+    return _HeroCard(
+      title: hero.title.isEmpty ? 'YBH' : hero.title,
+      subtitle: hero.subtitle.isEmpty
+          ? '义编会 · ${AppConfig.blogUrl.replaceFirst('https://', '')}'
+          : hero.subtitle,
+      tagline: hero.tagline,
+      signature: hero.signature,
+      coverUrl: hero.cover ? _coverUrl : null,
+      social: _config.social,
+      onShuffle: hero.cover ? _shuffleCover : null,
+      onOpenUrl: _openUrl,
+    );
+  }
+
+  /// 首屏背景：站点的随机图库。每次进首页/点「换封面」都换一张。
+  String _coverUrl = AppConfig.randomCoverUrl();
+
+  void _shuffleCover() {
+    setState(() => _coverUrl = AppConfig.randomCoverUrl());
+  }
+
+  // ------------------------------------------------------------ 顶栏工具（对应网站顶栏）
+
+  Widget _buildToolRow(BuildContext context) {
+    final tools = _config.tools;
+    if (tools.isEmpty) return const SizedBox.shrink();
+    return _ActionRow(
+      actions: [
+        for (final t in tools)
+          _RowAction(
+            label: t.label,
+            icon: _iconFor(t.icon),
+            onTap: () => _runTool(t),
+          ),
+      ],
+    );
+  }
+
+  void _runTool(HomeTool tool) {
+    switch (tool.action) {
+      case 'search':
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const SearchPage()),
+        );
+      case 'randomPost':
+        _openUrl(AppConfig.randomPostUrl, '随机文章');
+      case 'shuffleCover':
+        _shuffleCover();
+      case 'site':
+        widget.onOpenSite?.call();
+      default:
+        final url = tool.url;
+        if (url != null && url.isNotEmpty) _openUrl(url, tool.label);
+    }
+  }
+
+  // ------------------------------------------------------------ 导航分组（对应网站主导航）
+
+  Widget _buildNavGroups(BuildContext context) {
+    final groups = _config.nav;
+    if (groups.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < groups.length; i++) ...[
+          if (i > 0) const SizedBox(height: 14),
+          _NavGroupCard(
+            group: groups[i],
+            onOpen: (link) => _openUrl(link.url ?? '', link.title),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // ------------------------------------------------------------ 页脚（对应网站页脚）
+
+  Widget _buildFooter(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        const Divider(height: 1),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Image.asset(
-                'assets/icon/app_icon.png',
-                width: 52,
-                height: 52,
-                cacheWidth: 104,
-                cacheHeight: 104,
-                errorBuilder: (context, error, stackTrace) => Icon(
-                  Icons.article,
-                  size: 44,
-                  color: colorScheme.primary,
-                ),
+            for (final l in _config.footer)
+              _FootChip(
+                label: l.title,
+                onTap: () => _openUrl(l.url ?? '', l.title),
               ),
-            ),
-            const SizedBox(width: 14),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'YBH',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1,
-                    color: colorScheme.onSurface,
-                  ),
-                ),
-                Text(
-                  '义编会 · ${AppConfig.blogUrl.replaceFirst('https://', '')}',
-                  style: TextStyle(fontSize: 12.5, color: colorScheme.outline),
-                ),
-              ],
-            ),
           ],
         ),
         const SizedBox(height: 12),
         Text(
-          '一个正在慢慢长大的博客社区。写点什么，分享点什么，'
-          '偶尔也摇个奖。',
-          style: TextStyle(
-            fontSize: 13.5,
-            height: 1.7,
-            color: colorScheme.onSurfaceVariant,
-          ),
+          'YBH 客户端 · 主题 SakurairoYBH（forked from Sakurairo by Fuukei）',
+          style: TextStyle(fontSize: 11.5, color: colorScheme.outline),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          '内容由 WordPress 驱动 · ${AppConfig.blogUrl.replaceFirst('https://', '')}',
+          style: TextStyle(fontSize: 11.5, color: colorScheme.outline),
         ),
       ],
+    );
+  }
+
+  // ------------------------------------------------------------ 打开链接
+
+  /// 打开一个地址：站内留在应用内（WebView），站外同样用应用内 WebView
+  /// （内部导航策略会把站外转交系统浏览器）。
+  void _openUrl(String url, String title) {
+    if (url.isEmpty) return;
+    // 幸运摇人器有原生实现（含语音播报），别让它退化到网页版
+    if (url.contains('lr.yibianhui.cn')) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const LuckyPage()),
+      );
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _InAppWebPage(title: title, url: url),
+      ),
     );
   }
 
@@ -184,41 +265,6 @@ class _HomeTabState extends State<HomeTab> {
         ),
       );
     }
-  }
-
-  // ------------------------------------------------------------ 集成工具
-
-  Widget _buildTools(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _SectionTitle(title: '集成小工具', icon: Icons.widgets_outlined),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: _ToolCard(
-                icon: Icons.casino_outlined,
-                title: '幸运摇人器',
-                subtitle: '抽一人 / 连抽多人，含语音播报',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const LuckyPage()),
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _ToolCard(
-                icon: Icons.public_outlined,
-                title: '整站浏览',
-                subtitle: '完整网站体验',
-                onTap: widget.onOpenSite ?? () {},
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
   }
 
   // ------------------------------------------------------------ 展台
@@ -458,51 +504,6 @@ class _QuickLinkCard extends StatelessWidget {
   }
 }
 
-class _ToolCard extends StatelessWidget {
-  const _ToolCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, size: 26, color: colorScheme.primary),
-              const SizedBox(height: 10),
-              Text(title,
-                  style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 3),
-              Text(
-                subtitle,
-                style: TextStyle(fontSize: 12, color: colorScheme.outline),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _StatCard extends StatelessWidget {
   const _StatCard({
     required this.icon,
@@ -544,6 +545,444 @@ class _StatCard extends StatelessWidget {
             style: TextStyle(fontSize: 11.5, color: colorScheme.outline),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// 以下为「对齐网站主页组件」新增的部件
+// ============================================================================
+
+/// 图标名 → Material 图标。配置里只写名字，映射放在 App 端，
+/// 这样站点改配置不必关心 Flutter 的图标常量。
+IconData _iconFor(String name) => switch (name) {
+      'coffee' => Icons.coffee_outlined,
+      'group' => Icons.group_outlined,
+      'gift' => Icons.card_giftcard_outlined,
+      'heart' => Icons.favorite_outline,
+      'article' => Icons.article_outlined,
+      'edit' => Icons.edit_outlined,
+      'info' => Icons.info_outline,
+      'link' => Icons.link_outlined,
+      'casino' => Icons.casino_outlined,
+      'school' => Icons.school_outlined,
+      'campaign' => Icons.campaign_outlined,
+      'download' => Icons.download_outlined,
+      'person_add' => Icons.person_add_alt_outlined,
+      'search' => Icons.search_outlined,
+      'shuffle' => Icons.shuffle_outlined,
+      'image' => Icons.image_outlined,
+      'public' => Icons.public_outlined,
+      'github' => Icons.code_outlined,
+      'music' => Icons.music_note_outlined,
+      'mail' => Icons.mail_outline,
+      'wechat' => Icons.chat_bubble_outline,
+      'explore' => Icons.explore_outlined,
+      'hub' => Icons.hub_outlined,
+      'history' => Icons.history_outlined,
+      'shield' => Icons.shield_outlined,
+      'cookie' => Icons.cookie_outlined,
+      'gavel' => Icons.gavel_outlined,
+      'bolt' => Icons.bolt_outlined,
+      'widgets' => Icons.widgets_outlined,
+      'star' => Icons.auto_awesome_outlined,
+      _ => Icons.link_outlined,
+    };
+
+/// 首屏卡片 —— 对应网站主页的首屏：随机封面背景 + 大字标题 + 日文题词
+/// + 站点头像 + 社交图标行 + 「换封面」。
+class _HeroCard extends StatelessWidget {
+  const _HeroCard({
+    required this.title,
+    required this.subtitle,
+    required this.tagline,
+    required this.signature,
+    required this.coverUrl,
+    required this.social,
+    required this.onShuffle,
+    required this.onOpenUrl,
+  });
+
+  final String title;
+  final String subtitle;
+  final String tagline;
+  final String signature;
+  final String? coverUrl;
+  final List<HomeSocial> social;
+  final VoidCallback? onShuffle;
+  final void Function(String url, String label) onOpenUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    const onCover = Colors.white;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: Stack(
+        children: [
+          // 背景：站点随机封面；取不到就退成主题色的渐变
+          Positioned.fill(
+            child: coverUrl == null
+                ? DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          colorScheme.primary,
+                          colorScheme.tertiary,
+                        ],
+                      ),
+                    ),
+                  )
+                : Image.network(
+                    coverUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [colorScheme.primary, colorScheme.tertiary],
+                        ),
+                      ),
+                    ),
+                  ),
+          ),
+          // 压暗一层，保证白字在任何封面上都读得清
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.28),
+                    Colors.black.withValues(alpha: 0.62),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        color: Colors.white.withValues(alpha: 0.16),
+                        padding: const EdgeInsets.all(3),
+                        child: Image.asset(
+                          'assets/icon/app_icon.png',
+                          width: 44,
+                          height: 44,
+                          cacheWidth: 88,
+                          cacheHeight: 88,
+                          errorBuilder: (_, _, _) => const Icon(
+                            Icons.article,
+                            size: 40,
+                            color: onCover,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 30,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1,
+                              color: onCover,
+                            ),
+                          ),
+                          if (subtitle.isNotEmpty)
+                            Text(
+                              subtitle,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: onCover.withValues(alpha: 0.82),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    if (onShuffle != null)
+                      IconButton(
+                        onPressed: onShuffle,
+                        tooltip: '换封面',
+                        icon: Icon(Icons.casino_outlined,
+                            color: onCover.withValues(alpha: 0.9), size: 20),
+                      ),
+                  ],
+                ),
+                if (signature.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      signature,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        height: 1.4,
+                        color: onCover.withValues(alpha: 0.95),
+                      ),
+                    ),
+                  ),
+                ],
+                if (tagline.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    tagline,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.65,
+                      color: onCover.withValues(alpha: 0.92),
+                    ),
+                  ),
+                ],
+                if (social.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final s in social)
+                        _SocialChip(
+                          label: s.label,
+                          icon: _iconFor(s.icon),
+                          onTap: () => onOpenUrl(s.url, s.label),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SocialChip extends StatelessWidget {
+  const _SocialChip({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withValues(alpha: 0.16),
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: Colors.white),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 顶栏工具行 —— 对应网站顶栏的「搜索 / 随机换张背景 / 随机文章」。
+class _ActionRow extends StatelessWidget {
+  const _ActionRow({required this.actions});
+
+  final List<_RowAction> actions;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        for (var i = 0; i < actions.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          Expanded(child: actions[i]),
+        ],
+      ],
+    );
+  }
+}
+
+class _RowAction extends StatelessWidget {
+  const _RowAction({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+          child: Column(
+            children: [
+              Icon(icon, size: 19, color: colorScheme.primary),
+              const SizedBox(height: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 导航分组 —— 对应网站主导航的分组（「逛站点」「我们的站点」）。
+class _NavGroupCard extends StatelessWidget {
+  const _NavGroupCard({required this.group, required this.onOpen});
+
+  final HomeNavGroup group;
+  final void Function(HomeLink link) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionTitle(title: group.title, icon: _iconFor(group.icon)),
+        if (group.subtitle.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 3, left: 23),
+            child: Text(
+              group.subtitle,
+              style: TextStyle(fontSize: 11.5, color: colorScheme.outline),
+            ),
+          ),
+        const SizedBox(height: 10),
+        Card(
+          clipBehavior: Clip.antiAlias,
+          margin: EdgeInsets.zero,
+          child: Column(
+            children: [
+              for (var i = 0; i < group.links.length; i++) ...[
+                if (i > 0) const Divider(height: 1, indent: 62),
+                ListTile(
+                  leading: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: Icon(_iconFor(group.links[i].icon),
+                        size: 20, color: colorScheme.onPrimaryContainer),
+                  ),
+                  title: Text(
+                    group.links[i].title,
+                    style: const TextStyle(
+                        fontSize: 14.5, fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: group.links[i].subtitle.isEmpty
+                      ? null
+                      : Text(
+                          group.links[i].subtitle,
+                          style: TextStyle(
+                              fontSize: 12, color: colorScheme.outline),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                  trailing: const Icon(Icons.chevron_right_outlined, size: 20),
+                  onTap: () => onOpen(group.links[i]),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 页脚的法务胶囊 —— 对应网站页脚的「更新日志 / 隐私政策 / Cookie 政策 / 用户协议」。
+class _FootChip extends StatelessWidget {
+  const _FootChip({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: colorScheme.outlineVariant),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
       ),
     );
   }
