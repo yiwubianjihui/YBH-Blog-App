@@ -51,21 +51,42 @@ abstract final class AppConfig {
     return host == allowDomain || host.endsWith('.$allowDomain');
   }
 
-  /// 主题没有给文章设置特色图，Sakurairo 提供了随机图库接口：
-  /// 302 跳转到 wp-content/uploads/iro_gallery 下的图片，用作文章卡片封面。
-  static String coverUrl(int seed) =>
+  /// 封面图地址 —— 走**主题自带的轻量端点** `rand-cover.php`。
+  ///
+  /// ⚠️ 别改回 `/wp-json/sakura/v1/gallery`：那是主题内建 REST，每次请求都要
+  /// **完整启动 WordPress**（内核 + 全部插件 + 主题）再 302；一页 10 张封面就是
+  /// 10 次重量级 PHP 启动 —— 在这台内存吃紧的机器上是实打实的负担。
+  ///
+  /// `rand-cover.php` **不加载 WordPress**，只读 `imglist.json` 后 302，
+  /// 耗时从数百毫秒降到几毫秒，还自带 `Cache-Control: max-age=60`。
+  /// （网站侧早就这么做了，见主题 `inc/ybh/bootstrap.php` §9。）
+  ///
+  /// `seed` 参数端点并不使用（两个端点都是纯随机），它的作用是**给客户端当缓存键** ——
+  /// `CachedNetworkImage` 按 URL 做磁盘缓存，带稳定 seed 才能让同一篇文章的封面
+  /// 在 App 内保持一致。
+  static String coverUrl(int seed) => '$_coverBase?img=w&$seed';
+
+  /// 兜底封面端点（主题内建 REST）。万一 `rand-cover.php` 不可用
+  /// （例如主题被换掉、文件被删），卡片会退到这里，而不是直接显示占位图。
+  static String coverUrlFallback(int seed) =>
       'https://www.yibianhui.cn/wp-json/sakura/v1/gallery?img=w&$seed';
+
+  static const String _coverBase =
+      'https://www.yibianhui.cn/wp-content/themes/SakurairoYBH/rand-cover.php';
 
   /// 每次调用都换一张的随机封面（首页首屏用它当背景，点「换封面」也用它）。
   ///
-  /// ⚠️ **必须走 REST 的 `sakura/v1/gallery`**，不要用主题自带的
-  /// `themes/SakurairoYBH/rand-cover.php`：后者的 `Location` 头里是**未做百分号编码的
-  /// 原始中文路径**（`.../img/杂图/5267.webp`），这在 HTTP 头里是非法的。
-  /// curl 容错能过，但 Dart 的 HttpClient 不接受 ⇒ `Image.network` 直接失败、
-  /// 首屏只能退成渐变兜底（真机上踩过）。REST 端点的 Location 是正确编码的。
+  /// 用微秒时间戳当 seed：端点虽然忽略它，但**能保证每次 URL 都不同** ——
+  /// 否则 `CachedNetworkImage` 会把第一次的结果一直缓存下去，「换封面」就永远不换。
   static String randomCoverUrl({bool wide = true}) =>
+      '$_coverBase?img=${wide ? 'w' : 'l'}'
+      '&${DateTime.now().microsecondsSinceEpoch % 1000000007}';
+
+  /// `randomCoverUrl` 的兜底版本。
+  static String randomCoverUrlFallback({bool wide = true}) =>
       'https://www.yibianhui.cn/wp-json/sakura/v1/gallery'
-      '?img=${wide ? 'w' : 'l'}&${DateTime.now().microsecondsSinceEpoch % 1000000007}';
+      '?img=${wide ? 'w' : 'l'}'
+      '&${DateTime.now().microsecondsSinceEpoch % 1000000007}';
 
   /// 站点的「随机文章」入口（主题提供，302 跳到一篇随机文章）。
   /// 首页工具行与「随机文章」入口都用它。

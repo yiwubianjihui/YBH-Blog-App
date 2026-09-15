@@ -8,15 +8,21 @@ import '../data/blog_api.dart';
 import '../data/notification_feed.dart';
 import '../data/update_checker.dart';
 import '../ui/category_order_page.dart';
+import '../ui/editor_page.dart';
 import '../ui/home_tab.dart';
 import '../ui/notification_center_page.dart';
 import '../ui/profile_tab.dart';
 import '../ui/posts_tab.dart';
 import '../ui/search_page.dart';
+import '../data/wp_auth.dart';
 import 'webview_ui_state.dart';
 import 'webview_tab.dart' if (dart.library.html) 'webview_tab_stub.dart';
 
-/// 主外壳：底部导航（首页 / 文章 / 整站 / 我的）+ 抽屉菜单 + 动态 AppBar。
+/// 主外壳：底部导航（首页 / 文章 / **写文章** / 整站 / 我的）+ 抽屉菜单 + 动态 AppBar。
+///
+/// 中间那格是**动作**而不是标签页：点它直接进投稿编辑器。
+/// 放在这里是因为它是本 App 最高频的操作之一，塞在「我的」里既难找、
+/// 又会盖住昵称。
 class HomeShellPage extends StatefulWidget {
   const HomeShellPage({
     super.key,
@@ -38,6 +44,40 @@ class HomeShellPage extends StatefulWidget {
 class _HomeShellPageState extends State<HomeShellPage> {
   /// tab 索引：0 首页 / 1 文章 / 2 整站 / 3 我的。
   int _tab = 0;
+
+  /// 底部栏 5 格 → tab 索引；`null` 表示那格是**动作**（写文章），不是标签页。
+  static const List<int?> _navToTab = <int?>[0, 1, null, 2, 3];
+
+  /// 当前 tab 对应底部栏的第几格。
+  int get _navIndex {
+    final i = _navToTab.indexOf(_tab);
+    return i < 0 ? 0 : i;
+  }
+
+  void _onNavSelected(int navIndex) {
+    final tab = _navToTab[navIndex];
+    if (tab == null) {
+      // 中间的「写文章」：不进 tab，直接开编辑器。
+      _openEditor();
+      return;
+    }
+    _selectTab(tab);
+  }
+
+  /// 打开投稿编辑器。未登录时先去「我的」登录 —— 否则弹出来的编辑器
+  /// 每个按钮都会失败，不如直接把人送到登录入口。
+  Future<void> _openEditor() async {
+    if (!wpAuth.isLoggedIn) {
+      _selectTab(3);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('先到「我的」登录，就可以投稿了')),
+      );
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const EditorPage()),
+    );
+  }
 
   /// 「整站」标签是否已被访问过。
   ///
@@ -246,8 +286,8 @@ class _HomeShellPageState extends State<HomeShellPage> {
           ],
         ),
         bottomNavigationBar: NavigationBar(
-          selectedIndex: _tab,
-          onDestinationSelected: _selectTab,
+          selectedIndex: _navIndex,
+          onDestinationSelected: _onNavSelected,
           destinations: const [
             NavigationDestination(
               icon: Icon(Icons.home_outlined),
@@ -258,6 +298,12 @@ class _HomeShellPageState extends State<HomeShellPage> {
               icon: Icon(Icons.article_outlined),
               selectedIcon: Icon(Icons.article),
               label: '文章',
+            ),
+            // 中间这格是动作：点它进投稿编辑器（不切换标签页）。
+            NavigationDestination(
+              icon: Icon(Icons.edit_square),
+              selectedIcon: Icon(Icons.edit_square),
+              label: '写文章',
             ),
             NavigationDestination(
               icon: Icon(Icons.public_outlined),

@@ -214,6 +214,25 @@ pre { position: relative; }
   border: 1px solid rgba(127,127,127,.25); border-radius: 6px;
 }
 .ybh-copy:active { opacity: .7; }
+/* 文章头部（标题 / 时间 / 分类）：放在正文里随正文一起滚走，不做固定条。
+   固定头部会一直占着屏幕、把正文挤成一条缝（真机反馈）。 */
+.ybh-article-head { margin: 0 0 1.1em; }
+.ybh-article-head .ybh-title {
+  margin: 0 0 .42em;
+  font-size: 1.38em;
+  line-height: 1.4;
+  font-weight: 700;
+}
+.ybh-article-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4em .9em;
+  align-items: center;
+  font-size: .68em;
+  opacity: .72;
+}
+.ybh-article-meta .ybh-cat { color: var(--theme-skin, #505050); }
+body.dark .ybh-article-meta .ybh-cat { color: #a4cdf6; }
 ''';
 
   /// 组装 `<head>` 片段：站点样式（**按文档顺序**）→ 打包字体 → 外壳样式。

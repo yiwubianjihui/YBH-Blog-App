@@ -30,12 +30,10 @@ class PostCard extends StatelessWidget {
             SizedBox(
               width: 112,
               height: 112,
-              child: CachedNetworkImage(
-                imageUrl: post.coverUrl,
-                fit: BoxFit.cover,
+              child: CoverImage(
+                url: post.coverUrl,
+                fallbackUrl: post.coverUrlFallback,
                 memCacheWidth: 448,
-                placeholder: (context, url) => const CoverPlaceholder(),
-                errorWidget: (context, url, error) => const CoverPlaceholder(),
               ),
             ),
             Expanded(
@@ -111,6 +109,74 @@ class CoverPlaceholder extends StatelessWidget {
       child: const Center(
         child: Icon(Icons.article_outlined, color: Colors.white70, size: 30),
       ),
+    );
+  }
+}
+
+/// 封面图：先试主地址，失败自动换兜底地址重试一次，再失败才显示占位。
+///
+/// 为什么要这一层：App 的封面走主题的轻量端点 `rand-cover.php`（不加载 WordPress，
+/// 比内建 REST 快两个数量级）。但它毕竟是个主题文件 —— 万一主题被换掉、
+/// 文件被删，所有卡片会同时变成占位图。这里让它**自动退回内建 REST**，多一层保险。
+class CoverImage extends StatefulWidget {
+  const CoverImage({
+    super.key,
+    required this.url,
+    this.fallbackUrl,
+    this.fit = BoxFit.cover,
+    this.memCacheWidth,
+    this.errorWidget,
+  });
+
+  final String url;
+  final String? fallbackUrl;
+  final BoxFit fit;
+  final int? memCacheWidth;
+
+  /// 两个地址都失败时显示什么（默认 [CoverPlaceholder]）。
+  final Widget? errorWidget;
+
+  @override
+  State<CoverImage> createState() => _CoverImageState();
+}
+
+class _CoverImageState extends State<CoverImage> {
+  late String _url = widget.url;
+  bool _switched = false;
+
+  @override
+  void didUpdateWidget(CoverImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 父级换了图（例如点「换封面」）：跟着换，并允许重新走一次兜底
+    if (oldWidget.url != widget.url) {
+      _url = widget.url;
+      _switched = false;
+    }
+  }
+
+  void _switchToFallback() {
+    final fb = widget.fallbackUrl;
+    if (_switched || fb == null || fb.isEmpty || fb == _url) return;
+    _switched = true;
+    // errorWidget 是在 build 期间构造的，不能直接 setState ⇒ 推到下一帧
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _url = fb);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fallbackView = widget.errorWidget ?? const CoverPlaceholder();
+    return CachedNetworkImage(
+      key: ValueKey<String>(_url),
+      imageUrl: _url,
+      fit: widget.fit,
+      memCacheWidth: widget.memCacheWidth,
+      placeholder: (context, url) => fallbackView,
+      errorWidget: (context, url, error) {
+        _switchToFallback();
+        return fallbackView;
+      },
     );
   }
 }

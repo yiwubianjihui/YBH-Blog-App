@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:convert' show HtmlEscape;
 
 import '../app_config.dart';
 import '../data/blog_api.dart';
@@ -30,10 +31,37 @@ class PostDetailPage extends StatefulWidget {
 class _PostDetailPageState extends State<PostDetailPage> {
   late int _index = widget.initialIndex;
 
+  /// 阅读器滚动位置（CSS px）。用来让 AppBar 的标题**滚过正文标题后才出现**。
+  final ValueNotifier<double> _scrollY = ValueNotifier<double>(0);
+
+  @override
+  void dispose() {
+    _scrollY.dispose();
+    super.dispose();
+  }
+
   PostSummary get _post => widget.posts[_index];
 
   bool get _hasPrev => _index > 0;
   bool get _hasNext => _index < widget.posts.length - 1;
+
+  /// 文章头部 HTML（标题 / 时间 / 分类）。
+  ///
+  /// ⚠️ 放进**正文里面**，而不是 Flutter 侧固定一块：
+  /// 固定头部会一直占着屏幕、把正文挤成一条缝；而且 AppBar 里再放一份标题
+  /// 就成了「一页两个标题」（真机反馈的两个问题都出在这）。
+  /// 放进正文后标题随正文一起滚走，AppBar 只在滚过它之后才补标题。
+  String _headerHtml(PostSummary post) {
+    const esc = HtmlEscape();
+    final terms = post.terms.take(4).join(' · ');
+    final date = _formatDate(post.date);
+    return '<header class="ybh-article-head">'
+        '<div class="ybh-title">${esc.convert(post.title)}</div>'
+        '<div class="ybh-article-meta">'
+        '${date.isEmpty ? '' : '<span>${esc.convert(date)}</span>'}'
+        '${terms.isEmpty ? '' : '<span class="ybh-cat">${esc.convert(terms)}</span>'}'
+        '</div></header>';
+  }
 
   /// 是否用 WebView 阅读器（移动端 + macOS 可用；Web/桌面退回 flutter_html）。
   static bool get _useWebView =>
@@ -50,10 +78,12 @@ class _PostDetailPageState extends State<PostDetailPage> {
 
   void _goPrev() {
     if (_hasPrev) setState(() => _index--);
+    _scrollY.value = 0;
   }
 
   void _goNext() {
     if (_hasNext) setState(() => _index++);
+    _scrollY.value = 0;
   }
 
   Future<void> _share() async {
@@ -77,12 +107,31 @@ class _PostDetailPageState extends State<PostDetailPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          post.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
+        // 「一页两个标题」的修法：正文里已经有标题了，AppBar 这份**默认隐藏**，
+        // 只在滚过正文标题之后淡入 —— 既不会一页两标题，也不会一直占着屏幕。
+        title: _useWebView
+            ? ValueListenableBuilder<double>(
+                valueListenable: _scrollY,
+                builder: (context, y, child) => AnimatedOpacity(
+                  opacity: y > 48 ? 1 : 0,
+                  duration: const Duration(milliseconds: 160),
+                  child: child,
+                ),
+                child: Text(
+                  post.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+              )
+            : Text(
+                post.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
         actions: [
           IconButton(
             tooltip: '分享',
@@ -96,59 +145,65 @@ class _PostDetailPageState extends State<PostDetailPage> {
           ),
         ],
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 标题 + 日期 + 标签。
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-            child: Column(
+      body: _useWebView
+          // 标题 / 时间 / 分类都塞进正文里，随正文一起滚走。
+          ? ArticleWebView(
+              content: post.content,
+              dark: dark,
+              headerHtml: _headerHtml(post),
+              scrollY: _scrollY,
+            )
+          // 非 WebView 平台（Web/桌面）保持原来的固定头部。
+          : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  post.title,
-                  style: const TextStyle(
-                      fontSize: 21, fontWeight: FontWeight.w700, height: 1.4),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Icon(Icons.schedule_outlined,
-                        size: 14, color: colorScheme.outline),
-                    const SizedBox(width: 4),
-                    Text(
-                      _formatDate(post.date),
-                      style:
-                          TextStyle(fontSize: 12.5, color: colorScheme.outline),
-                    ),
-                    if (post.terms.isNotEmpty) ...[
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          post.terms.take(4).join(' · '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 12.5, color: colorScheme.primary),
-                        ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        post.title,
+                        style: const TextStyle(
+                            fontSize: 21,
+                            fontWeight: FontWeight.w700,
+                            height: 1.4),
                       ),
+                      const SizedBox(height: 10),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Icon(Icons.schedule_outlined,
+                              size: 14, color: colorScheme.outline),
+                          const SizedBox(width: 4),
+                          Text(
+                            _formatDate(post.date),
+                            style: TextStyle(
+                                fontSize: 12.5, color: colorScheme.outline),
+                          ),
+                          if (post.terms.isNotEmpty) ...[
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                post.terms.take(4).join(' · '),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: colorScheme.primary),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      const Divider(height: 1),
                     ],
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 12),
-                const Divider(height: 1),
+                Expanded(child: _HtmlBody(content: post.content)),
               ],
             ),
-          ),
-          // 正文。
-          Expanded(
-            child: _useWebView
-                ? ArticleWebView(content: post.content, dark: dark)
-                : _HtmlBody(content: post.content),
-          ),
-        ],
-      ),
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),

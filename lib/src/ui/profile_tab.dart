@@ -161,11 +161,29 @@ class _ProfileTabState extends State<ProfileTab> {
     setState(() => _categoryPrefs = prefs);
   }
 
-  Future<void> _writeArticle() async {
-    final result = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const EditorPage()),
-    );
-    if (result == true && mounted) _loadMyPosts();
+  /// 分享应用。
+  ///
+  /// 之前把 `SharePlus.instance.share(...)` 直接挂在 `onTap` 上：它返回 Future，
+  /// 一旦抛错（没有可分享的目标、`uri` 参数在部分机型不被支持等）就是**静默失败**
+  /// —— 表现就是「点了没反应」。现在显式 await + 捕获，
+  /// 失败时退回「复制邀请文案」，保证这一下点击总有反馈。
+  Future<void> _shareApp(BuildContext context) async {
+    final text =
+        '推荐这个博客客户端给你：${AppConfig.appName}\n站点：${AppConfig.blogUrl}';
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final result = await SharePlus.instance.share(
+        ShareParams(text: text, subject: AppConfig.appName),
+      );
+      if (result.status == ShareResultStatus.dismissed) return;
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: text));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('这台设备没有可用的分享方式，已把推荐文案复制到剪贴板'),
+        ),
+      );
+    }
   }
 
   Future<void> _openCategoryOrder() async {
@@ -195,7 +213,6 @@ class _ProfileTabState extends State<ProfileTab> {
           _LoggedInHeader(
             user: wpAuth.user!,
             onLogout: _logout,
-            onWrite: _writeArticle,
           ),
         const SizedBox(height: 20),
         // 分类管理放在最前面：这是最常用的个性化入口，以前藏在页面底部不容易找到。
@@ -322,12 +339,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 leading: const Icon(Icons.share_outlined),
                 title: const Text('分享应用'),
                 subtitle: const Text('把 YBH 推荐给朋友'),
-                onTap: () => SharePlus.instance.share(
-                  ShareParams(
-                    text: '推荐这个博客客户端给你：${AppConfig.appName}\n站点：${AppConfig.blogUrl}',
-                    uri: Uri.parse(AppConfig.blogUrl),
-                  ),
-                ),
+                onTap: () => _shareApp(context),
               ),
               const Divider(height: 1, indent: 56),
               ListTile(
@@ -374,7 +386,9 @@ class _ProfileTabState extends State<ProfileTab> {
                 Text(
                   'YBH 是义编会（www.yibianhui.cn）的官方客户端：'
                   '刷文章、逛整站、投稿、摇人，一个 App 全搞定。\n'
-                  '支持 Android / iOS / macOS / Web，桌面端会跳转到系统浏览器。',
+                  '目前只有 Android 版（需要 Android 7.0 及以上）。'
+                  'iOS 与 macOS 版本暂未提供 —— 在 iPhone / Mac 上直接访问'
+                  '网站即可，功能是一样的。',
                   style: TextStyle(
                     fontSize: 13.5,
                     height: 1.7,
@@ -565,17 +579,16 @@ class _LoginCard extends StatelessWidget {
   }
 }
 
-/// 已登录：用户信息头部 + 写文章按钮。
+/// 已登录：用户信息头部（写文章入口已移到**底部栏中央**，这里不再放按钮 ——
+/// 原先那个按钮会盖住昵称，而且藏在「我的」里也不好找）。
 class _LoggedInHeader extends StatelessWidget {
   const _LoggedInHeader({
     required this.user,
     required this.onLogout,
-    required this.onWrite,
   });
 
   final WpUser user;
   final VoidCallback onLogout;
-  final VoidCallback onWrite;
 
   @override
   Widget build(BuildContext context) {
@@ -652,12 +665,6 @@ class _LoggedInHeader extends StatelessWidget {
                   ],
                 ),
               ),
-            FilledButton.icon(
-              onPressed: onWrite,
-              icon: const Icon(Icons.edit_outlined, size: 18),
-              label: const Text('写文章'),
-            ),
-            const SizedBox(width: 4),
             IconButton(
               tooltip: '退出登录',
               icon: const Icon(Icons.logout_outlined),

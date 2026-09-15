@@ -55,8 +55,11 @@ class PostSummary {
         _ => null,
       };
 
-  /// 随机封面图（Sakurairo 图库，302 跳转到真实图片）。
+  /// 随机封面图（主题图库端点 `rand-cover.php`，302 跳转到真实图片，不加载 WordPress）。
   String get coverUrl => AppConfig.coverUrl(id);
+
+  /// 封面的兜底地址：万一 `rand-cover.php` 不可用就退到主题内建 REST。
+  String get coverUrlFallback => AppConfig.coverUrlFallback(id);
 
   factory PostSummary.fromJson(Map<String, dynamic> json) {
     final terms = <String>[];

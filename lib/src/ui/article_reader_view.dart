@@ -32,6 +32,8 @@ class ArticleWebView extends StatefulWidget {
     super.key,
     required this.content,
     required this.dark,
+    this.headerHtml = '',
+    this.scrollY,
   });
 
   /// 文章正文 HTML（WordPress REST API rendered 内容）。
@@ -40,8 +42,21 @@ class ArticleWebView extends StatefulWidget {
   /// 是否深色（跟随 App 内手动夜间模式）。
   final bool dark;
 
+  /// 正文上方的头部 HTML（标题 / 时间 / 分类）。
+  ///
+  /// 放在**正文里面**而不是 Flutter 侧固定一块，是为了让标题随正文一起滚走 ——
+  /// 固定标题会一直占着屏幕、把正文挤成一条缝（真机反馈的问题）。
+  final String headerHtml;
+
+  /// 滚动位置（CSS px）回报给外层，用于「滚过标题后 AppBar 再显示标题」。
+  final ValueNotifier<double>? scrollY;
+
   /// 构造阅读器 HTML 文档。
-  static String buildHtml({required String content, required bool dark}) {
+  static String buildHtml({
+    required String content,
+    required bool dark,
+    String headerHtml = '',
+  }) {
     final theme = dark ? 'dark' : 'light';
     return '''
 <!DOCTYPE html>
@@ -56,10 +71,23 @@ ${WebStyle.instance.headHtml()}
 <div class="wrapper">
 <div class="ybh-shell">
 <div class="entry-content">
+$headerHtml
 $content
 </div>
 </div>
 </div>
+<script>
+(function () {
+  // 滚动位置回报：外层据此决定 AppBar 何时显示标题。
+  var last = -1;
+  window.addEventListener('scroll', function () {
+    var y = window.scrollY || document.documentElement.scrollTop || 0;
+    if (Math.abs(y - last) < 4) return;
+    last = y;
+    try { YbhScroll.postMessage(String(Math.round(y))); } catch (e) {}
+  }, { passive: true });
+})();
+</script>
 <script>
 (function () {
   // 代码块：提取 language-* 语言标签 + 添加复制按钮（阅读器增强）。
@@ -140,6 +168,14 @@ class _ArticleWebViewState extends State<ArticleWebView> {
           debugPrint('[YBH Reader] ${message.message}');
         },
       )
+      ..addJavaScriptChannel(
+        'YbhScroll',
+        onMessageReceived: (JavaScriptMessage message) {
+          final y = double.tryParse(message.message);
+          final notifier = widget.scrollY;
+          if (y != null && notifier != null) notifier.value = y;
+        },
+      )
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (String url) {
@@ -180,6 +216,7 @@ class _ArticleWebViewState extends State<ArticleWebView> {
       ArticleWebView.buildHtml(
         content: widget.content,
         dark: widget.dark,
+        headerHtml: widget.headerHtml,
       ),
       baseUrl: '${AppConfig.blogUrl}/',
     );

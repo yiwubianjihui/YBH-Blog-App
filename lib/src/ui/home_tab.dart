@@ -100,17 +100,25 @@ class _HomeTabState extends State<HomeTab> {
       tagline: hero.tagline,
       signature: hero.signature,
       coverUrl: hero.cover ? _coverUrl : null,
+      coverFallbackUrl: hero.cover ? _coverFallbackUrl : null,
       social: _config.social,
       onShuffle: hero.cover ? _shuffleCover : null,
       onOpenUrl: _openUrl,
     );
   }
 
-  /// 首屏背景：站点的随机图库。每次进首页/点「换封面」都换一张。
+  /// 首屏背景：站点随机图库。每次进首页/点「换封面」都换一张。
+  ///
+  /// 走主题的轻量端点 `rand-cover.php`（不加载 WordPress），
+  /// 另存一份内建 REST 地址做兜底（见 [CoverImage]）。
   String _coverUrl = AppConfig.randomCoverUrl();
+  String _coverFallbackUrl = AppConfig.randomCoverUrlFallback();
 
   void _shuffleCover() {
-    setState(() => _coverUrl = AppConfig.randomCoverUrl());
+    setState(() {
+      _coverUrl = AppConfig.randomCoverUrl();
+      _coverFallbackUrl = AppConfig.randomCoverUrlFallback();
+    });
   }
 
   // ------------------------------------------------------------ 顶栏工具（对应网站顶栏）
@@ -599,6 +607,7 @@ class _HeroCard extends StatelessWidget {
     required this.tagline,
     required this.signature,
     required this.coverUrl,
+    required this.coverFallbackUrl,
     required this.social,
     required this.onShuffle,
     required this.onOpenUrl,
@@ -609,9 +618,21 @@ class _HeroCard extends StatelessWidget {
   final String tagline;
   final String signature;
   final String? coverUrl;
+  final String? coverFallbackUrl;
   final List<HomeSocial> social;
   final VoidCallback? onShuffle;
   final void Function(String url, String label) onOpenUrl;
+
+  /// 封面与兜底都取不到时的底：主题色渐变。
+  static Widget _gradient(ColorScheme c) => DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [c.primary, c.tertiary],
+          ),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -621,33 +642,14 @@ class _HeroCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(20),
       child: Stack(
         children: [
-          // 背景：站点随机封面；取不到就退成主题色的渐变
+          // 背景：站点随机封面；两个端点都取不到才退成主题色渐变
           Positioned.fill(
             child: coverUrl == null
-                ? DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          colorScheme.primary,
-                          colorScheme.tertiary,
-                        ],
-                      ),
-                    ),
-                  )
-                : Image.network(
-                    coverUrl!,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [colorScheme.primary, colorScheme.tertiary],
-                        ),
-                      ),
-                    ),
+                ? _gradient(colorScheme)
+                : CoverImage(
+                    url: coverUrl!,
+                    fallbackUrl: coverFallbackUrl,
+                    errorWidget: _gradient(colorScheme),
                   ),
           ),
           // 压暗一层，保证白字在任何封面上都读得清

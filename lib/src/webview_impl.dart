@@ -267,11 +267,13 @@ class BlogWebViewState extends State<BlogWebViewPage> {
             _ui.currentUrl.value = url;
             _ui.loading.value = true;
             _ui.hasError.value = false;
+            _injectAllowed = _shouldInject(url);
             _injectPageScript();
           },
           onPageFinished: (String url) async {
             _ui.currentUrl.value = url;
             _ui.loading.value = false;
+            _injectAllowed = _shouldInject(url);
             await _refreshNavigationState();
             await _configureAndroidWebView();
             // 自动登录：登录页加载完成后立即填表提交。
@@ -397,12 +399,30 @@ class BlogWebViewState extends State<BlogWebViewPage> {
     _ui.canGoBack.value = await _controller.canGoBack();
   }
 
+  /// 当前页面是否允许注入「性能模式 + 字体本地化」。
+  ///
+  /// ⚠️ 这套注入是**为主站的 WordPress 主题定制的**：站点载入遮罩 `#preload`、
+  /// 19.2 MB 中文字体、粒子 canvas、`filter/backdrop-filter` 重特效。
+  /// 而 teacher / brs / i18n / lr 这些是**各自独立的静态子站**，
+  /// 既不需要这些、被注入后还会出问题 —— 实测「教师节」在 App 内**整页白屏**，
+  /// 同一地址在系统浏览器里渲染完全正常（对照实验确认）。
+  /// 所以只对主域注入，其它子站一律原样渲染。
+  bool _injectAllowed = true;
+
+  bool _shouldInject(String url) {
+    final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+    if (host.isEmpty) return true; // 拿不到主机名（about:blank 等）→ 保持原行为
+    return host == AppConfig.allowDomain ||
+        host == 'www.${AppConfig.allowDomain}';
+  }
+
   /// Android 专项调优：关闭滚动条与过度滚动光晕，减少滚动时系统额外绘制。
   /// 尽早注入页面脚本（性能样式 + 兜底移除站点载入遮罩）。
   ///
   /// 导航早期调用时目标文档可能还在切换，失败或被作用在旧文档上都没关系：
   /// 脚本自带去重，后续进度点与 onPageFinished 会再补一次。
   void _injectPageScript() {
+    if (!_injectAllowed) return;
     _controller.runJavaScript(_pageScript).catchError((Object _) {});
     _injectFontScript();
   }
