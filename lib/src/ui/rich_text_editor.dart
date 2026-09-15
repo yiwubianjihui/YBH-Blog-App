@@ -180,6 +180,11 @@ class RichTextEditorController {
       if (decoded is Map<String, dynamic>) {
         toolbar.value = EditorToolbarState.fromJson(decoded);
         revision.value++;
+        // 编辑器里的诊断信息（例如「折叠光标下发样式有没有落成 DOM」）
+        final dbg = decoded['dbg'];
+        if (dbg is String && dbg.isNotEmpty) {
+          debugPrint('[YBH EditorDbg] $dbg');
+        }
       }
     } catch (_) {}
   }
@@ -303,8 +308,10 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
     var st = {
       bold: q('bold'), italic: q('italic'), strike: q('strikeThrough'),
       ul: q('insertUnorderedList'), ol: q('insertOrderedList'),
-      block: block, chars: text.length, fn: inFn
+      block: block, chars: text.length, fn: inFn,
+      dbg: dbgMsg
     };
+    dbgMsg = '';
     try { YbhEditorState.postMessage(JSON.stringify(st)); } catch (e) {}
     try { refreshEmpty(); } catch (e) {}
   }
@@ -340,6 +347,73 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
   function stripTags(s) { return (s || '').replace(/<[^>]*>/g, ''); }
   function esc(s) {
     return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // ---- 让「先点按钮、再打字」真的生效（Android WebView 专项补丁）----
+  // 桌面 Chromium 里，光标折叠时执行 execCommand('bold') 会设置一个"待生效样式"，
+  // 之后输入的文字继承它。**Android WebView 不会**（真机实测：点 B 后按钮不高亮、
+  // 打出来的字也不粗；同一份 JS 在桌面 Edge 上却是好的，见 T34c 交接文档 §六）。
+  // 对策：把样式落成真实 DOM —— 在光标处插一个 `<b>零宽空格</b>` 并把光标移进元素内部，
+  // 之后输入的文字就天然继承该样式。零宽空格在导出时会被 normalize() 清掉，不会进正文。
+  var ZWSP = String.fromCharCode(0x200b);
+  var INLINE_CMD = { bold: 'b', italic: 'i', strikeThrough: 's' };
+
+  // 诊断信息：随 post() 一起回传 Dart，由 debugPrint 落到 logcat。
+  // （WebView 的 console.log 在 release 包里不会进 logcat，所以走这条通道。）
+  var dbgMsg = '';
+  function dbg(s) { dbgMsg = s; }
+
+  // 取当前光标；拿不到（或选区不在编辑器里）就把光标放到编辑器末尾再返回。
+  // Android WebView 在按钮夺焦后经常出现「有选区对象但 rangeCount=0」，此时
+  // 直接用 getSelection() 会静默失败——这是上一版补丁没生效的原因。
+  function ensureCaret() {
+    try {
+      var s = sel();
+      if (s && s.rangeCount > 0) {
+        var cur = s.getRangeAt(0);
+        if (ed.contains(cur.startContainer)) return cur;
+      }
+    } catch (e) {}
+    try {
+      ed.focus();
+      var r = document.createRange();
+      r.selectNodeContents(ed);
+      r.collapse(false);
+      var s2 = sel();
+      if (s2) { s2.removeAllRanges(); s2.addRange(r); }
+      return r;
+    } catch (e) {
+      console.log('[YbhDbg] ensureCaret failed: ' + e);
+      return null;
+    }
+  }
+
+  function materializeInline(tag) {
+    var r = ensureCaret();
+    if (!r) { dbg('materialize:' + tag + ' 无光标'); return; }
+    try {
+      var el = document.createElement(tag);
+      var t = document.createTextNode(ZWSP);
+      el.appendChild(t);
+      r.deleteContents();
+      r.insertNode(el);
+      var nr = document.createRange();
+      nr.setStart(t, t.length);
+      nr.collapse(true);
+      var s = sel();
+      if (s) { s.removeAllRanges(); s.addRange(nr); }
+      saveRange();
+      dbg('materialize:' + tag + ' 成功 -> ' + ed.innerHTML.slice(0, 70));
+    } catch (e) {
+      // Range API 失败时退回 execCommand('insertHTML')
+      try {
+        document.execCommand('insertHTML', false,
+            '<' + tag + '>' + ZWSP + '</' + tag + '>');
+        dbg('materialize:' + tag + ' Range失败改用insertHTML -> ' + ed.innerHTML.slice(0, 70));
+      } catch (e2) {
+        dbg('materialize:' + tag + ' 彻底失败 ' + e + ' / ' + e2);
+      }
+    }
   }
 
   // ---- 脚注：编辑期显示徽章，导出时还原成 [fn]…[/fn] ----
@@ -403,6 +477,24 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
       }
     }
     // 3) 去掉纯空白文本节点（避免导出里夹一堆空行）
+    // 4) 清掉「先点按钮再打字」用的零宽空格；若因此留下空的格式元素，一并删掉
+    var zw = String.fromCharCode(0x200b);
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var hit = [];
+    while (walker.nextNode()) {
+      if (walker.currentNode.nodeValue.indexOf(zw) >= 0) hit.push(walker.currentNode);
+    }
+    for (var k = 0; k < hit.length; k++) {
+      hit[k].nodeValue = hit[k].nodeValue.split(zw).join('');
+    }
+    var INLINE_TAGS = 'b,strong,i,em,s,strike,u';
+    var empties = root.querySelectorAll(INLINE_TAGS);
+    for (var e2 = empties.length - 1; e2 >= 0; e2--) {
+      var el2 = empties[e2];
+      if (el2.parentNode && !el2.textContent && !el2.querySelector('img,br')) {
+        el2.parentNode.removeChild(el2);
+      }
+    }
     return root;
   }
   function importHtml(html) {
@@ -442,7 +534,20 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
     setHtml: function (html) { importHtml(html); post(); },
     exec: function (cmd, value) {
       restore();
+      var wasCollapsed = true;
+      try {
+        var s0 = sel();
+        wasCollapsed = !(s0 && s0.rangeCount > 0 && !s0.getRangeAt(0).collapsed);
+      } catch (e) {}
       try { document.execCommand(cmd, false, value === undefined ? null : value); } catch (e) {}
+      // 折叠光标下的行内命令：若引擎没把样式"挂上"（Android WebView 即是如此），
+      // 就用真实 DOM 补一个空格式元素，让后续输入继承。桌面已生效则跳过，行为不变。
+      if (wasCollapsed && INLINE_CMD[cmd]) {
+        var took = false;
+        try { took = !!document.queryCommandState(cmd); } catch (e) {}
+        dbg('exec ' + cmd + ' collapsed=' + wasCollapsed + ' took=' + took);
+        if (!took) materializeInline(INLINE_CMD[cmd]);
+      }
       if (cmd === 'formatBlock' || cmd === 'insertOrderedList' || cmd === 'insertUnorderedList') {
         setTimeout(refreshFnNumbers, 0);
       }
