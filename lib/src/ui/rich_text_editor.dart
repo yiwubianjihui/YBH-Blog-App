@@ -298,7 +298,11 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
       }
     } catch (e) {}
     var text = '';
-    try { text = (ed.innerText || '').replace(/\\s+/g, ' ').trim(); } catch (e) {}
+    try {
+      // 去掉「先点按钮再打字」用的零宽空格，否则空文档也会显示 1 字
+      text = (ed.innerText || '').replace(/\\s+/g, ' ')
+          .split(String.fromCharCode(0x200b)).join('').trim();
+    } catch (e) {}
     var inFn = false;
     try {
       var s = window.getSelection();
@@ -545,8 +549,13 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
       if (wasCollapsed && INLINE_CMD[cmd]) {
         var took = false;
         try { took = !!document.queryCommandState(cmd); } catch (e) {}
-        dbg('exec ' + cmd + ' collapsed=' + wasCollapsed + ' took=' + took);
-        if (!took) materializeInline(INLINE_CMD[cmd]);
+        // ⚠️ **不能用 took 决定要不要补 DOM**：真机实测 Android WebView
+        // 在这里返回 took=true（它认为命令成功了），但随后由输入法提交的文字
+        // **并不会**继承这个"待生效样式"，打出来照样不是粗体。
+        // 只有把样式落成真实 DOM（光标落进 <b> 里面）才真正管用，所以一律执行。
+        // 桌面 Chromium 上这条也是安全的：光标已在 <b> 内，浏览器不会重复嵌套同种内联样式。
+        dbg('exec ' + cmd + ' collapsed=' + wasCollapsed + ' took=' + took + ' -> 补DOM');
+        materializeInline(INLINE_CMD[cmd]);
       }
       if (cmd === 'formatBlock' || cmd === 'insertOrderedList' || cmd === 'insertUnorderedList') {
         setTimeout(refreshFnNumbers, 0);
