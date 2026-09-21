@@ -63,3 +63,9 @@ app.*.map.json
 
 # Gradle 根目录构建产物（Flutter 构建时生成）
 /android/build/
+
+# ---- font build intermediates / migration artifacts (T30 收尾) ----
+/_artifacts/
+*.bak-*
+assets/fonts/slice.bak-*/
+assets/fonts/ext/
