@@ -51,6 +51,45 @@ class EditorToolbarState {
       );
 }
 
+/// 查找 / 替换的状态（面板上「第 N / 共 M 处」那一行）。
+///
+/// 语义对齐网页端 T33：命中数来自**文本节点**匹配，与标签、属性无关。
+@immutable
+class EditorFindState {
+  const EditorFindState({
+    this.query = '',
+    this.count = 0,
+    this.index = 0,
+    this.caseSensitive = false,
+  });
+
+  final String query;
+  final int count;
+  final int index;
+  final bool caseSensitive;
+
+  bool get hasQuery => query.isNotEmpty;
+  bool get found => count > 0;
+
+  /// 1 基的当前位置（无命中为 0）。
+  int get position => count == 0 ? 0 : index + 1;
+
+  static const EditorFindState empty = EditorFindState();
+
+  static EditorFindState fromJson(Map<String, dynamic> j) => EditorFindState(
+        query: (j['query'] ?? '').toString(),
+        count: (j['count'] is int) ? j['count'] as int : 0,
+        index: (j['index'] is int) ? j['index'] as int : 0,
+        caseSensitive: j['caseSensitive'] == true,
+      );
+
+  /// 面板上显示的一行提示。
+  String get label {
+    if (!hasQuery) return '';
+    return found ? '第 $position / 共 $count 处' : '未找到';
+  }
+}
+
 /// 富文本编辑器控制器：Dart ↔ WebView 的桥。
 ///
 /// 之所以用 `contenteditable` 的 WebView 而不是原生富文本控件：
@@ -130,6 +169,35 @@ class RichTextEditorController {
   /// 聚焦编辑区（工具栏点完后让键盘保持弹出）。
   Future<void> focus() => _js('window.YbhEditor.focusEditor()');
 
+  /// 当前选中的纯文本（打开查找面板时预填，网页端同样这么做）。
+  Future<String> selectionText() async {
+    final raw = await _evalString('window.YbhEditor.selectionText()');
+    return raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  /// 设定查找词并跳到第一处。
+  Future<EditorFindState> find(String query, {bool caseSensitive = false}) async {
+    final r = await _evalJson(
+        'window.YbhEditor.find(${jsonEncode(query)}, $caseSensitive)');
+    return r == null ? EditorFindState.empty : EditorFindState.fromJson(r);
+  }
+
+  /// 上一个（-1）/ 下一个（1），循环。
+  Future<EditorFindState> findStep(int delta) async {
+    final r = await _evalJson('window.YbhEditor.findStep($delta)');
+    return r == null ? EditorFindState.empty : EditorFindState.fromJson(r);
+  }
+
+  /// 替换当前命中（[all] 为 true 时全部替换；替换为空串表示删除）。
+  Future<EditorFindState> findReplace(String replace, {bool all = false}) async {
+    final r = await _evalJson(
+        'window.YbhEditor.findReplace(${jsonEncode(replace)}, $all)');
+    return r == null ? EditorFindState.empty : EditorFindState.fromJson(r);
+  }
+
+  /// 关闭查找面板时清掉查询与高亮。
+  Future<void> findClear() => _js('window.YbhEditor.findClear()');
+
   Future<void> _js(String code) async {
     final web = _web;
     if (web == null) return;
@@ -158,6 +226,18 @@ class RichTextEditorController {
       debugPrint('[YBH editor] eval 失败: $e');
     }
     return null;
+  }
+
+  /// 求一个返回**字符串**的表达式（如 `selectionText()`）。
+  Future<String> _evalString(String expr) async {
+    final web = _web;
+    if (web == null) return '';
+    try {
+      return _unwrap(await web.runJavaScriptReturningResult(expr));
+    } catch (e) {
+      debugPrint('[YBH editor] eval 失败: $e');
+      return '';
+    }
   }
 
   /// `runJavaScriptReturningResult` 各平台包装不一致：Android 返回原始字符串，
@@ -528,6 +608,79 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
     if (!ed.innerHTML.trim()) ed.innerHTML = '<p><br></p>';
   }
 
+  /* ===== 查找 / 替换（对齐网页端 T33 的 js/ybh-post-editor.js）=====
+     要点：**只改文本节点**，从不碰标签与属性 —— 所以不会把 <a href="…"> 的地址
+     或 <strong> 的嵌套改坏（网页端那条的注释也是这么写的）。
+     匹配不重叠、向右推进；上限 5000 处，避免病态查询把 UI 卡死。
+     命中定位走 Range/Selection（**不改 DOM**），所以反复「下一个」不会留下残留。 */
+  var fr = { query: '', caseSensitive: false, matches: [], index: 0 };
+
+  function frTextNodes() {
+    var out = [];
+    var walker = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        var p = n.parentNode;
+        if (!p) return NodeFilter.FILTER_REJECT;
+        var tag = (p.nodeName || '').toLowerCase();
+        if (tag === 'script' || tag === 'style') return NodeFilter.FILTER_REJECT;
+        if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var n;
+    while ((n = walker.nextNode())) out.push(n);
+    return out;
+  }
+
+  function frRecollect() {
+    fr.matches = [];
+    if (!fr.query) return;
+    var needle = fr.caseSensitive ? fr.query : fr.query.toLowerCase();
+    var nodes = frTextNodes();
+    for (var i = 0; i < nodes.length; i++) {
+      var data = nodes[i].nodeValue || '';
+      var probe = fr.caseSensitive ? data : data.toLowerCase();
+      var from = 0, at;
+      while ((at = probe.indexOf(needle, from)) !== -1) {
+        fr.matches.push({ node: nodes[i], start: at, end: at + fr.query.length });
+        from = at + fr.query.length;
+        if (fr.matches.length > 5000) return;
+      }
+    }
+  }
+
+  function frState() {
+    return JSON.stringify({
+      query: fr.query, count: fr.matches.length, index: fr.index,
+      caseSensitive: fr.caseSensitive
+    });
+  }
+
+  function frFocus() {
+    if (!fr.matches.length) { saveRange(); return; }
+    var m = fr.matches[fr.index];
+    if (!m || !m.node || !m.node.parentNode) return;
+    // 替换过之后节点文本可能变短，越界就直接放弃这一处（下次会重算）。
+    if (m.end > (m.node.nodeValue || '').length) return;
+    try {
+      var r = document.createRange();
+      r.setStart(m.node, m.start);
+      r.setEnd(m.node, m.end);
+      var s = sel();
+      if (s) { s.removeAllRanges(); s.addRange(r); }
+      var p = m.node.parentNode;
+      if (p && p.scrollIntoView) p.scrollIntoView({ block: 'center' });
+    } catch (e) {}
+    // 把当前选区存成"待应用格式"的目标：找到之后点加粗，作用于这一处。
+    saveRange();
+  }
+
+  function frSetIndex(i) {
+    if (!fr.matches.length) { fr.index = 0; return; }
+    var n = fr.matches.length;
+    fr.index = ((i % n) + n) % n;
+  }
+
   window.YbhEditor = {
     getPayload: function () {
       refreshFnNumbers();
@@ -641,7 +794,92 @@ body.dark { background: var(--dark-bg-primary, rgba(51,51,51,1)); }
       saveRange(); post();
     },
     focusEditor: function () { restore(); },
-    onPaste: function () {}
+    onPaste: function () {},
+
+    /* ---- 查找 / 替换（T34 遗留项，对齐网页端 T33）---- */
+
+    /** 当前选中的纯文本（打开面板时预填查找框，网页端也是这么做的）。 */
+    selectionText: function () {
+      try {
+        var s = sel();
+        if (!s || !s.rangeCount) return '';
+        return String(s.toString() || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+      } catch (e) { return ''; }
+    },
+
+    /** 设定查询词并跳到第一处；返回 {query,count,index,caseSensitive}。 */
+    find: function (query, caseSensitive) {
+      fr.query = String(query == null ? '' : query);
+      fr.caseSensitive = !!caseSensitive;
+      fr.index = 0;
+      frRecollect();
+      frFocus();
+      return frState();
+    },
+
+    /** 上一个 / 下一个（delta = -1 / 1），循环。 */
+    findStep: function (delta) {
+      if (!fr.matches.length) frRecollect();
+      if (!fr.matches.length) return frState();
+      frSetIndex(fr.index + (delta || 1));
+      frFocus();
+      return frState();
+    },
+
+    /**
+     * 替换。all=false 只替换当前命中；all=true 全部替换。
+     * 全部替换按节点分组、每节点内**从后往前**改，避免偏移失效。
+     * 替换为空串表示删除（网页端亦然）。
+     */
+    findReplace: function (replace, all) {
+      if (!fr.matches.length) frRecollect();
+      if (!fr.matches.length) return frState();
+      var rep = String(replace == null ? '' : replace);
+      if (all) {
+        var byNode = [];
+        for (var i = 0; i < fr.matches.length; i++) {
+          var m = fr.matches[i];
+          var last = byNode[byNode.length - 1];
+          if (last && last.node === m.node) { last.items.push(m); }
+          else { byNode.push({ node: m.node, items: [m] }); }
+        }
+        for (var j = 0; j < byNode.length; j++) {
+          var g = byNode[j];
+          if (!g.node || !g.node.parentNode) continue;
+          var data = g.node.nodeValue || '';
+          for (var k = g.items.length - 1; k >= 0; k--) {
+            var it = g.items[k];
+            if (it.end > data.length) continue;
+            data = data.slice(0, it.start) + rep + data.slice(it.end);
+          }
+          g.node.nodeValue = data;
+        }
+        fr.index = 0;
+      } else {
+        var c = fr.matches[fr.index];
+        if (c && c.node && c.node.parentNode) {
+          var d = c.node.nodeValue || '';
+          if (c.end <= d.length) {
+            c.node.nodeValue = d.slice(0, c.start) + rep + d.slice(c.end);
+          }
+        }
+        frRecollect();
+        if (fr.index >= fr.matches.length) fr.index = 0;
+      }
+      frRecollect();
+      frFocus();
+      post();
+      return frState();
+    },
+
+    /** 关闭面板时清掉查询与选区高亮。 */
+    findClear: function () {
+      fr.query = '';
+      fr.matches = [];
+      fr.index = 0;
+      try { var s = sel(); if (s) s.removeAllRanges(); } catch (e) {}
+      return frState();
+    },
   };
 
   // 粘贴：只保留纯文本（避免把网页样式带进来；与网页端"粘贴为文本"一致）

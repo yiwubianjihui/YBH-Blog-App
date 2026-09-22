@@ -62,9 +62,12 @@
 # ---------------------------------------------------------------------------
 
 param(
-  [string]$Sdk         = 'E:\dsh\.tools\android-sdk',
-  [string]$FlutterRoot = 'E:\dsh\.tools\flutter',
-  [string]$PubCache    = 'E:\dsh\.tools\pub-cache',
+  # NOTE: the toolchain moved from E:\dsh\.tools\* to C:\Dev\* in mid-Sept 2026
+  # (see handoff/T46 section 1.1: Flutter 3.47.1 stable, Android SDK platform-36,
+  # NDK 28.2.13676358). The old E: paths no longer exist and fail at pub get.
+  [string]$Sdk         = 'C:\Dev\android\sdk',
+  [string]$FlutterRoot = 'C:\Dev\flutter',
+  [string]$PubCache    = 'C:\Dev\pub-cache',
   [string]$Ndk         = '28.2.13676358',
   [string]$VersionName = '',
   [int]$VersionCode    = 0,
@@ -173,11 +176,16 @@ Get-ChildItem (Join-Path $repo 'build\app\outputs\flutter-apk\*.apk') -ErrorActi
 
 Write-Host @"
 
-Install on the device and verify font localisation:
+Install on the device and verify (font localisation / covers / editor / nav):
   adb install -r build\app\outputs\flutter-apk\app-release.apk
   adb logcat -c ; adb shell monkey -p cn.yibianhui.blog -c android.intent.category.LAUNCHER 1
-  adb logcat -d | Select-String 'YBH (WebView|fonts)'
-Expected lines (Chinese text as printed by the app):
-  [YBH fonts] <n> bundled fonts, replacement CSS <n> chars
-  [YBH WebView vX.Y.Z] fonts | localisation done: 83 site @font-face removed, gate <n>ms
+  adb logcat -d | Select-String "YBH (WebView|fonts|Reader|editor)"
+
+Expected lines:
+  [YBH fonts] 16 files -> 26 inline rules (0 skipped), CSS <n> chars, 2 keep-prefixes
+  [YBH WebView vX.Y.Z] fonts | 16 files, 26 inline rules (0 skipped), ready=true
+  [YBH WebView ...] fonts | localisation done: <n> site @font-face removed, 148 kept, 1 inserted
+
+NOTE: "skipped" > 0 means pubspec.yaml assets: is missing a directory -- see
+      test/font_manifest_test.dart, which fails loudly on exactly that.
 "@

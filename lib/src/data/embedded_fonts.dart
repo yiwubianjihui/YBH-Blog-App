@@ -66,8 +66,32 @@ class EmbeddedFonts {
   /// 打包文件数（诊断用）。
   int _fileCount = 0;
 
+  /// 实际生成的内联规则数（诊断用）。
+  int _ruleCount = 0;
+
+  /// 因为资产缺失而**跳过**的规则数（诊断用）。
+  ///
+  /// 非零就说明 `pubspec.yaml` 的 `assets:` 与清单对不上 —— 这正是 215161b
+  /// 那次「清单引用了 slices/ 与 emoji/、而 pubspec 没声明」的故障特征。
+  /// 旧实现遇到缺失资产会**整体抛异常**，于是全部字体静默退回站点下载。
+  int _skippedCount = 0;
+
+  /// 站点 CSS 里**不删**的 @font-face（按 URL 前缀匹配），交给浏览器按
+  /// unicode-range 懒加载。取自清单的 `keepOnSitePrefixes`。
+  List<String> _keepPrefixes = const [];
+
+  /// 组装好的整段注入脚本（含 jsonEncode 过的 CSS）。
+  ///
+  /// 必须在 [prepare] 里**只拼一次**：`_css` 是十几 MB 的字符串，而
+  /// [webviewScript] 每次导航都会被取用 —— 放在 getter 里现拼就等于每次
+  /// 都给这十几 MB 做一遍转义扫描与分配。
+  String _script = '';
+
   bool get isReady => _loaded && _css.isNotEmpty;
   int get fileCount => _fileCount;
+  int get ruleCount => _ruleCount;
+  int get skippedCount => _skippedCount;
+  List<String> get keepPrefixes => List.unmodifiable(_keepPrefixes);
 
   /// 替代用 @font-face CSS（data: URI）。阅读器 / 编辑器把这段直接内联进
   /// 本地 HTML 的 `<head>`（站点 CSS 里的 @font-face 已被 WebStyle 剔除）。
@@ -77,6 +101,10 @@ class EmbeddedFonts {
   int get cssBytes => _css.length;
 
   /// 载入 manifest 并把所有字体读成 base64，拼出替代 CSS。幂等。
+  ///
+  /// **单条规则失败不影响其余**：某个资产没打进包（pubspec 漏声明目录）时
+  /// 只跳过那一条并计数，其余字体照常内联。宁可少几条面，也不要整站退回
+  /// 十几 MB 的网络字体。
   Future<void> prepare() async {
     if (_loaded || _loading) return;
     _loading = true;
@@ -90,18 +118,36 @@ class EmbeddedFonts {
       }
       final rules = (json['rules'] as List<dynamic>).cast<Map<String, dynamic>>();
       _fileCount = files.length;
+      final keep = <String>[];
+      for (final k in (json['keepOnSitePrefixes'] as List<dynamic>? ?? const [])) {
+        keep.add(k as String);
+      }
+      _keepPrefixes = keep;
 
       final sb = StringBuffer();
       sb.write('/* YBH · 打包字体内联（T30）。描述符逐条对应站点 CSS，'
           'src 换成 data: URI。 */\n');
       final cache = <String, String>{};      // path → base64
+      var skipped = 0;
+      var emitted = 0;
       for (final r in rules) {
         final path = r['path'] as String;
         final asset = files[path];
-        if (asset == null) continue;
-        final b64 = cache[path] ??= base64Encode(
-          (await rootBundle.load(asset)).buffer.asUint8List(),
-        );
+        if (asset == null) {
+          skipped++;
+          continue;
+        }
+        String b64;
+        try {
+          b64 = cache[path] ??= base64Encode(
+            (await rootBundle.load(asset)).buffer.asUint8List(),
+          );
+        } catch (e) {
+          // 资产没打进包（pubspec 漏了目录）或读失败：跳过这一条，不拖垮整体。
+          skipped++;
+          debugPrint('[YBH fonts] 跳过 $path（$asset 读不到）：$e');
+          continue;
+        }
         sb.write('@font-face{');
         sb.write('font-family:"${r['family']}";');
         sb.write('font-style:${r['style'] ?? 'normal'};');
@@ -111,10 +157,18 @@ class EmbeddedFonts {
         if (ur != null && ur.isNotEmpty) sb.write('unicode-range:$ur;');
         sb.write('src:url(data:font/woff2;base64,$b64) format("woff2");');
         sb.write('}\n');
+        emitted++;
       }
       _css = sb.toString();
-      _loaded = true;
-      debugPrint('[YBH fonts] 打包 ${files.length} 个字体，生成替换 CSS ${_css.length} 字符');
+      _ruleCount = emitted;
+      _skippedCount = skipped;
+      // 只要还有一条规则成立就算就绪：缺几条面总好过整站退回下载。
+      _loaded = emitted > 0;
+      _script = _loaded ? _buildScript() : '';
+      debugPrint('[YBH fonts] 打包 ${files.length} 个字体 → 内联 $emitted 条规则'
+          '（跳过 $skipped），替换 CSS ${_css.length} 字符，'
+          '注入脚本 ${_script.length} 字符，'
+          '留在站点懒加载前缀 ${_keepPrefixes.length} 条');
     } catch (e) {
       debugPrint('[YBH fonts] 准备失败，退回站点字体: $e');
     } finally {
@@ -126,11 +180,18 @@ class EmbeddedFonts {
   ///
   /// 重复注入安全（状态挂在 `window.__ybhFonts` 上）；
   /// 未准备好时返回空串，调用方跳过即可。
-  String get webviewScript {
-    if (!isReady) return '';
+  ///
+  /// ⚠️ 这段脚本里带着整个替换 CSS（十几 MB），**每次注入都要跨平台通道
+  /// 传一遍**。所以：① 同一个文档里只应注入一次，后续补注用 [kickScript]；
+  /// ② 脚本在 [prepare] 里就拼好缓存（见 `_script`），不在 getter 里现拼。
+  String get webviewScript => _script;
+
+  /// 实际拼装注入脚本（只在 [prepare] 里调用一次）。
+  String _buildScript() {
     return '''
 (function () {
   var CSS = ${jsonEncode(_css)};
+  var KEEP = ${jsonEncode(_keepPrefixes)};
   var REPORT = function (t) {
     try { if (window.YbhDiag) { window.YbhDiag.postMessage('字体 | ' + t); } } catch (e) {}
   };
@@ -140,7 +201,7 @@ class EmbeddedFonts {
   var STYLE_ID = 'ybh-font-local';
   var PREFIX = '/ybh-fonts/';
   var st = { removed: 0, inserted: 0, lifted: false, t0: Date.now(), liftAt: 0, done: false,
-             stable: 0, lastSheets: -1 };
+             stable: 0, lastSheets: -1, kept: 0 };
 
   // ---- 1) 闸门 ----
   function hold() {
@@ -160,26 +221,35 @@ class EmbeddedFonts {
     if (st.lifted) return;
     st.lifted = true;
     st.liftAt = Date.now() - st.t0;
+    // 闸门只清一次：下面那个 while 是为了吃掉重复插入的闸门节点。
     try {
       var el = document.getElementById(HOLD_ID);
       while (el && el.parentNode) { el.parentNode.removeChild(el); el = document.getElementById(HOLD_ID); }
     } catch (e) {}
-    REPORT('本地化完成：删除 ' + st.removed + ' 条站点 @font-face，插入 ' + st.inserted +
-           ' 条内联规则，闸门 ' + st.liftAt + 'ms');
+    REPORT('本地化完成：删除 ' + st.removed + ' 条站点 @font-face，保留 ' + st.kept +
+           ' 条懒加载，插入 ' + st.inserted + ' 条内联规则，闸门 ' + st.liftAt + 'ms');
   }
 
-  // ---- 2) 删掉站点里所有引用 ybh-fonts 的 @font-face ----
+  // ---- 2) 删掉站点里所有引用 ybh-fonts 的 @font-face（清单标了 keep 的除外）----
   //
   // 必须先把 url 解析成绝对地址：FontAwesome 的 all.min.css 写的是
   // `url(../webfonts/fa-solid-900.woff2)`，字符串里根本没有 "ybh-fonts"。
+  //
+  // 位置很关键：本样式插在 `<head>` 靠前处，站点样式在后 —— 所以站点保留下来的
+  // 分片规则会在“同族同码位后声明者胜”里赢过我们的面，正好实现「基础字体本地、
+  // 罕用字按需下载」。**不要为了抢优先级把本样式挪到 head 末尾。**
   function isBundleFont(u, sheetHref) {
     var abs;
     try { abs = new URL(u, sheetHref || location.href).href; } catch (e) { return false; }
-    return abs.indexOf(PREFIX) !== -1;
+    if (abs.indexOf(PREFIX) === -1) return false;
+    for (var i = 0; i < KEEP.length; i++) {
+      if (abs.indexOf(KEEP[i]) !== -1) return false;
+    }
+    return true;
   }
 
   function stripSiteFaces() {
-    var n = 0, sheets;
+    var n = 0, kept = 0, sheets;
     try { sheets = document.styleSheets; } catch (e) { return 0; }
     for (var i = 0; i < sheets.length; i++) {
       if (sheets[i].ownerNode && sheets[i].ownerNode.id === STYLE_ID) continue;
@@ -194,16 +264,24 @@ class EmbeddedFonts {
         try { src = r.style.getPropertyValue('src'); } catch (e) { continue; }
         if (!src) continue;
         var us = src.match(/url\\(\\s*(['"]?)([^'")]+)\\1\\s*\\)/g) || [];
+        var isKeep = false, isBundle = false;
         for (var k = 0; k < us.length; k++) {
           var u = us[k].replace(/^url\\(\\s*['"]?/, '').replace(/['"]?\\s*\\)\$/, '');
-          if (isBundleFont(u, href)) { kill.push(j); break; }
+          if (isBundleFont(u, href)) { isBundle = true; break; }
+          for (var q = 0; q < KEEP.length; q++) {
+            try {
+              if (new URL(u, href || location.href).href.indexOf(KEEP[q]) !== -1) isKeep = true;
+            } catch (e) {}
+          }
         }
+        if (isBundle) kill.push(j); else if (isKeep) kept++;
       }
       // 从后往前删，避免索引前移
       for (var m = kill.length - 1; m >= 0; m--) {
         try { sheets[i].deleteRule(kill[m]); n++; } catch (e) {}
       }
     }
+    st.kept = kept;   // 覆盖而不是累加：这个函数在放开闸门前会被反复调用
     return n;
   }
 
@@ -259,4 +337,15 @@ class EmbeddedFonts {
 })();
 ''';
   }
+
+  /// 同文档内的「补注」脚本：只有几十字节，用来替代重复注入整段 [webviewScript]。
+  ///
+  /// 背景：`WebViewScreen` 在 `onProgress`(10/35/65) 与 `onPageFinished` 都会补注，
+  /// 早先每次都把整段 11.7 MB 的脚本重新送一遍（一页最多 5 次）⇒ 几十 MB 的无谓
+  /// 跨通道传输。现在只在 `onPageStarted` / `onPageFinished` 送整段，其余送这个。
+  ///
+  /// 若整段从未注入成功（例如它落在了导航前的旧文档上），这里是**空操作**，
+  /// 不会有副作用；`onPageFinished` 那次整段注入会兜住。
+  static const String kickScript =
+      '(function(){try{var f=window.__ybhFonts;if(f&&f.kick)f.kick();}catch(e){}})();';
 }

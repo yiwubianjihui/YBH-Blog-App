@@ -605,6 +605,9 @@ IconData _iconFor(String name) => switch (name) {
       'school' => Icons.school_outlined,
       'campaign' => Icons.campaign_outlined,
       'download' => Icons.download_outlined,
+      // T37 小游戏站 / ClassIsland 试写作业插件（2026-09 新增入口）
+      'game' => Icons.sports_esports_outlined,
+      'assignment' => Icons.assignment_outlined,
       'person_add' => Icons.person_add_alt_outlined,
       'search' => Icons.search_outlined,
       'shuffle' => Icons.shuffle_outlined,

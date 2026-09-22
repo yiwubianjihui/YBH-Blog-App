@@ -244,10 +244,17 @@ class HomeConfig {
       HomeTool(label: '整站浏览', action: 'site', icon: 'public'),
     ],
     nav: <HomeNavGroup>[
+      // 与站点**顶部菜单**对齐（2026-09-22 线上快照核对）。
+      //
+      // ⚠️ 站点那份菜单存在 WordPress 数据库里，仓库里没有定义 —— 改站内菜单
+      // 不会自动同步到这里。所以这里的两组是「站点菜单的 App 版投影」：
+      // 分组名、以及 1.3.10 起「更新日志」从页脚移到菜单、T37 新增的「小游戏」、
+      // 新增的「试写作业插件」，都按线上现状落在这里。
+      // 站点侧若再调整菜单，改这里（或改远端 home/config.json 的 nav 段）即可。
       HomeNavGroup(
-        title: '逛站点',
+        title: 'YBH',
         icon: 'explore',
-        subtitle: '网站主页的主入口',
+        subtitle: '网站顶部菜单的主入口',
         links: <HomeLink>[
           HomeLink(
               title: '全部文章',
@@ -265,6 +272,11 @@ class HomeConfig {
               url: 'https://www.yibianhui.cn/submit/',
               icon: 'edit'),
           HomeLink(
+              title: '更新日志',
+              subtitle: '主题与站务改了什么',
+              url: 'https://www.yibianhui.cn/changelog/',
+              icon: 'history'),
+          HomeLink(
               title: '关于我们',
               subtitle: 'YBH 是什么',
               url: 'https://www.yibianhui.cn/about/',
@@ -277,10 +289,20 @@ class HomeConfig {
         ],
       ),
       HomeNavGroup(
-        title: '我们的站点',
+        title: '项目',
         icon: 'hub',
-        subtitle: 'YBH 旗下的其他站点',
+        subtitle: 'YBH 旗下的其他站点与工具',
         links: <HomeLink>[
+          HomeLink(
+              title: '小游戏',
+              subtitle: 'YBH 小游戏大厅',
+              url: 'https://game.yibianhui.cn',
+              icon: 'game'),
+          HomeLink(
+              title: '试写作业插件',
+              subtitle: 'ClassIsland 值班插件',
+              url: 'https://tools.yibianhui.cn',
+              icon: 'assignment'),
           HomeLink(
               title: '幸运摇人器',
               subtitle: '抽一人 / 连抽多人，含语音播报',
@@ -304,11 +326,13 @@ class HomeConfig {
         ],
       ),
     ],
+    // 站点页脚的法务行：隐私政策 · Cookie 政策 · 用户协议 · Cookie 设置。
+    // 前三条照搬；**「Cookie 设置」没有对应项** —— 它是站点页脚里一个
+    // `onclick="YBHConsent.open()"` 的 JS 弹层（inc/ybh/cookie-banner.php），
+    // App 的原生首页没有这个上下文。它对应的实际操作（重新选择同意项）
+    // 在「整站」页的站点页脚里，或未同意时打开任意站点页都会出现横幅。
+    // 宁可少一项，也不放一个点了没反应的假入口。
     footer: <HomeLink>[
-      HomeLink(
-          title: '更新日志',
-          url: 'https://www.yibianhui.cn/changelog/',
-          icon: 'history'),
       HomeLink(
           title: '隐私政策',
           url: 'https://www.yibianhui.cn/privacy-policy/',

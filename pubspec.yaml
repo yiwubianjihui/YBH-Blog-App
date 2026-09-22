@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.0.22+22
+version: 0.0.23+23
 
 environment:
   sdk: ^3.13.1
@@ -78,13 +78,20 @@ flutter:
   assets:
     - assets/icon/app_icon.png
     # T30：打包进安装包的网页字体（含 manifest.json）。
-    # 站点 CSS 里的 url(…/ybh-fonts/<rel>) 由 App 改写为
-    # http://127.0.0.1:<port>/f/<rel>，由 lib/src/data/embedded_fonts.dart 供给。
-    # 注意 Flutter 的目录声明**不含子目录**，每个子目录都要单独列出。
+    # 清单由 tool/font_manifest.py 从站点 css/ybh.css 生成，是唯一真值。
+    # 注意 Flutter 的目录声明**不含子目录**，每个子目录都要单独列出；
+    # 漏一个目录会让 rootBundle.load 抛异常、EmbeddedFonts.prepare() 整体失败
+    # ⇒ 字体本地化静默失效（215161b 就是这样丢的）。test/font_manifest_test.dart 守住这条。
     - assets/fonts/
     - assets/fonts/slice/
     - assets/fonts/klee-one/
+    - assets/fonts/emoji/
     - assets/fonts/fontawesome/webfonts/
+    # ⚠️ assets/fonts/slices/（147 个扩展汉字面分片）**故意不在这里**：
+    # 它们留在站点由 WebView 按 unicode-range 懒加载（用到才下 ~95 KB）。
+    # 内联进 data: URI 会让每次导航注入的替换 CSS 多 17.6 MB，而站点语料
+    # 实际用到的 6 个扩展字已由 3.5 KB 的 slice/SarasaUiSC-ExtB.woff2 覆盖。
+    # 详见 docs/T30-字体清单.md 与 tool/font_manifest.py 的 LAZY_DIRS。
 
   # To add assets to your application, add an assets section, like this:
   # assets:

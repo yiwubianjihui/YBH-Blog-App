@@ -262,6 +262,8 @@ class BlogWebViewState extends State<BlogWebViewPage> {
           onProgress: (int progress) {
             _ui.progress.value = progress;
             // 关键进度点补注：越早解除站点载入遮罩，整站页越快见到内容。
+            // 字体脚本改用**小体积补注**（见 _injectFontScript）：整段替换 CSS
+            // 有 11.7 MB，早先每个进度点都重送一遍，一页最多 5 次。
             if (progress == 10 || progress == 35 || progress == 65) {
               _injectPageScript();
             }
@@ -271,7 +273,8 @@ class BlogWebViewState extends State<BlogWebViewPage> {
             _ui.loading.value = true;
             _ui.hasError.value = false;
             _injectAllowed = _shouldInject(url);
-            _injectPageScript();
+            // 整段字体脚本：新文档的第一次注入，必须带全量替换 CSS。
+            _injectPageScript(fullFonts: true);
           },
           onPageFinished: (String url) async {
             _ui.currentUrl.value = url;
@@ -311,7 +314,8 @@ class BlogWebViewState extends State<BlogWebViewPage> {
               }
             }
             // 性能模式 + 兜底移除站点载入遮罩（早期已注入，这里兜最后一刀）。
-            _injectPageScript();
+            // 字体脚本再送一次整段：保证「早期那次落在了旧文档上」也能兜住。
+            _injectPageScript(fullFonts: true);
             // 载入探针：把「到底加载到了什么」回报给日志，并据此判断要不要改用系统浏览器。
             //
             // 为什么需要它：teacher / brs 这类**独立静态子站**在应用内 WebView 里会**整页白屏**
@@ -322,10 +326,13 @@ class BlogWebViewState extends State<BlogWebViewPage> {
             // 处置：正文为空就把这一页交给**系统浏览器**打开。与其让用户对着一片白，
             // 不如换个一定能显示的地方 —— 反正这些子站不需要 App 的任何注入能力。
             await _probeAndMaybeHandOff(url);
-            // 字体本地化状态回报（打包文件数 / 内联 CSS 体量）。
+            // 字体本地化状态回报（打包文件数 / 内联规则数 / 内联 CSS 体量）。
+            // skipped>0 说明 pubspec 的 assets 与清单对不上，是必须立刻修的信号。
             final fonts = EmbeddedFonts.instance;
             debugPrint('[YBH WebView v$_appVersion] 字体 | 打包 ${fonts.fileCount} 个，'
-                '内联 CSS ${fonts.cssBytes} 字符，就绪=${fonts.isReady}');
+                '内联 ${fonts.ruleCount} 条规则（跳过 ${fonts.skippedCount}），'
+                'CSS ${fonts.cssBytes} 字符，留站点懒加载 ${fonts.keepPrefixes.length} 条，'
+                '就绪=${fonts.isReady}');
           },
           onWebResourceError: (WebResourceError error) {
             // 只对主框架错误显示错误页，避免图片等子资源失败误报。
@@ -439,19 +446,26 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   ///
   /// 导航早期调用时目标文档可能还在切换，失败或被作用在旧文档上都没关系：
   /// 脚本自带去重，后续进度点与 onPageFinished 会再补一次。
-  void _injectPageScript() {
+  ///
+  /// [fullFonts] 为 true 时连字体替换脚本一起送（整段约 11.7 MB），
+  /// 否则只送几十字节的补注脚本 —— 见 [_injectFontScript]。
+  void _injectPageScript({bool fullFonts = false}) {
     if (!_injectAllowed) return;
     _controller.runJavaScript(_pageScript).catchError((Object _) {});
-    _injectFontScript();
+    _injectFontScript(full: fullFonts);
   }
 
   /// T30：注入「网页字体本地化」脚本（闸门 → 改写 CSSOM → 放开闸门）。
   ///
-  /// 与 [_injectPageScript] 一样在导航早期与多个进度点重复注入；
-  /// 脚本以 `window.__ybhFonts` 去重，重复调用只是再 kick 一次。
-  void _injectFontScript() {
-    final js = EmbeddedFonts.instance.webviewScript;
-    if (js.isEmpty) return;   // 服务没起来（例如平台不支持）→ 退回站点原字体
+  /// 整段脚本里带着替换 CSS（约 11.7 MB），跨平台通道送一次不便宜，
+  /// 所以**只在 `onPageStarted` 与 `onPageFinished` 各送一次**（后者保证落在
+  /// 最终文档上）；`onProgress` 的补注走 [EmbeddedFonts.kickScript]，
+  /// 页面内的脚本本来就有 10 ms 定时器与 DOMContentLoaded/load 钩子自行 kick，
+  /// 少了重复搬运没有任何功能损失。
+  void _injectFontScript({bool full = false}) {
+    final fonts = EmbeddedFonts.instance;
+    final js = full ? fonts.webviewScript : EmbeddedFonts.kickScript;
+    if (js.isEmpty) return;   // 未就绪（例如资产没打进包）→ 退回站点原字体
     _controller.runJavaScript(js).catchError((Object _) {});
   }
 

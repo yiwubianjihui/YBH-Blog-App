@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/blog_api.dart';
@@ -50,6 +52,20 @@ class _EditorPageState extends State<EditorPage> {
   bool _dirty = false;
   bool _submitted = false;
 
+  /// 查找 / 替换面板（T34 遗留项，补齐网页端 T33 的能力）。
+  ///
+  /// 做成**内嵌在工具栏下方的一条**而不是弹窗：键盘弹起时编辑区高度已经很紧
+  /// （见 build 里的 keyboardUp 处理），模态弹窗会把正文完全盖住，
+  /// 而查找恰恰需要边看正文边改。
+  bool _findOpen = false;
+  final TextEditingController _findQuery = TextEditingController();
+  final TextEditingController _findReplace = TextEditingController();
+  bool _findCase = false;
+  EditorFindState _findState = EditorFindState.empty;
+
+  /// 查询词的防抖计时器：边打字边重算命中，但不必每个字符都过一遍桥。
+  Timer? _findDebounce;
+
   /// 是否有直接发布权限（读不到能力时乐观视为 true）。
   bool get _canPublish => _me?.canPublish ?? true;
 
@@ -67,10 +83,94 @@ class _EditorPageState extends State<EditorPage> {
 
   @override
   void dispose() {
+    _findDebounce?.cancel();
+    _findQuery.dispose();
+    _findReplace.dispose();
     _titleController.removeListener(_markDirty);
     _titleController.dispose();
     _editor.dispose();
     super.dispose();
+  }
+
+  // ------------------------------------------------------------ 查找 / 替换
+
+  /// 打开面板：用编辑器里已选中的文字预填查找框（网页端也是这个直觉期望）。
+  Future<void> _openFind() async {
+    final selected = await _editor.selectionText();
+    if (!mounted) return;
+    if (selected.isNotEmpty && selected.length <= 60) {
+      _findQuery.text = selected;
+    }
+    setState(() => _findOpen = true);
+    await _runFind(keepIndex: false);
+  }
+
+  Future<void> _closeFind() async {
+    _findDebounce?.cancel();
+    await _editor.findClear();
+    if (!mounted) return;
+    setState(() {
+      _findOpen = false;
+      _findState = EditorFindState.empty;
+    });
+  }
+
+  void _onFindQueryChanged() {
+    _findDebounce?.cancel();
+    _findDebounce = Timer(const Duration(milliseconds: 180), () {
+      _runFind(keepIndex: false);
+    });
+  }
+
+  Future<void> _runFind({bool keepIndex = true}) async {
+    final state = await _editor.find(_findQuery.text, caseSensitive: _findCase);
+    if (!mounted) return;
+    setState(() => _findState = state);
+  }
+
+  Future<void> _findStep(int delta) async {
+    final state = await _editor.findStep(delta);
+    if (!mounted) return;
+    setState(() => _findState = state);
+  }
+
+  Future<void> _findReplaceOne() async {
+    final state =
+        await _editor.findReplace(_findReplace.text, all: false);
+    if (!mounted) return;
+    setState(() => _findState = state);
+    _markDirty();
+  }
+
+  /// 全部替换：先问一次（与网页端 WangEditor 菜单的行为一致），
+  /// 因为这个动作不可撤销。
+  Future<void> _findReplaceAll() async {
+    final count = _findState.count;
+    if (count == 0) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('全部替换'),
+        content: Text(
+          '将替换 $count 处「${_findQuery.text}」。'
+          '${_findReplace.text.isEmpty ? '替换内容为空 ⇒ 这 $count 处会被删除。' : ''}'
+          '此操作不可撤销，确定继续？',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('全部替换')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final state = await _editor.findReplace(_findReplace.text, all: true);
+    if (!mounted) return;
+    setState(() => _findState = state);
+    _markDirty();
   }
 
   void _markDirty() {
@@ -411,7 +511,26 @@ class _EditorPageState extends State<EditorPage> {
               onInsertLink: _insertLink,
               onInsertImage: _insertImage,
               onChanged: _markDirty,
+              onFind: _openFind,
+              findActive: _findOpen,
             ),
+            if (_findOpen)
+              _FindPanel(
+                query: _findQuery,
+                replace: _findReplace,
+                caseSensitive: _findCase,
+                state: _findState,
+                onQueryChanged: _onFindQueryChanged,
+                onCaseChanged: (v) {
+                  setState(() => _findCase = v);
+                  _runFind(keepIndex: false);
+                },
+                onPrev: () => _findStep(-1),
+                onNext: () => _findStep(1),
+                onReplaceOne: _findReplaceOne,
+                onReplaceAll: _findReplaceAll,
+                onClose: _closeFind,
+              ),
             const Divider(height: 1),
             Expanded(
               child: Stack(
@@ -537,12 +656,20 @@ class _Toolbar extends StatelessWidget {
     required this.onInsertLink,
     required this.onInsertImage,
     required this.onChanged,
+    required this.onFind,
+    this.findActive = false,
   });
 
   final RichTextEditorController controller;
   final Future<void> Function() onInsertLink;
   final Future<void> Function() onInsertImage;
   final VoidCallback onChanged;
+
+  /// 打开查找 / 替换面板。
+  final Future<void> Function() onFind;
+
+  /// 查找面板是否已打开（按钮高亮）。
+  final bool findActive;
 
   @override
   Widget build(BuildContext context) {
@@ -643,6 +770,13 @@ class _Toolbar extends StatelessWidget {
                   icon: Icons.format_clear,
                   tip: '清除格式',
                   onTap: () => _runCustom(controller.clearFormat),
+                ),
+                const _Sep(),
+                _Btn(
+                  icon: Icons.search,
+                  tip: '查找 / 替换',
+                  active: findActive,
+                  onTap: () { onFind(); },
                 ),
               ],
             ),
@@ -784,6 +918,125 @@ class _Sep extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 6),
         color: Theme.of(context).colorScheme.outlineVariant,
       );
+}
+
+/// 查找 / 替换面板（内嵌在工具栏下方，不是弹窗）。
+///
+/// 能力与网页端 T33 对齐：查找下一个 / 上一个（循环）、替换当前、全部替换
+/// （先确认）、区分大小写；匹配**只作用于文本节点**，不会改坏标签与链接 ——
+/// 那部分逻辑在编辑器的 JS 里（[RichTextEditor]），这里只管界面。
+class _FindPanel extends StatelessWidget {
+  const _FindPanel({
+    required this.query,
+    required this.replace,
+    required this.caseSensitive,
+    required this.state,
+    required this.onQueryChanged,
+    required this.onCaseChanged,
+    required this.onPrev,
+    required this.onNext,
+    required this.onReplaceOne,
+    required this.onReplaceAll,
+    required this.onClose,
+  });
+
+  final TextEditingController query;
+  final TextEditingController replace;
+  final bool caseSensitive;
+  final EditorFindState state;
+  final VoidCallback onQueryChanged;
+  final ValueChanged<bool> onCaseChanged;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final VoidCallback onReplaceOne;
+  final VoidCallback onReplaceAll;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    // 「找不到」用错误色，让用户一眼看出是没命中而不是还没输入。
+    final labelColor = !state.hasQuery
+        ? colorScheme.outline
+        : (state.found ? colorScheme.onSurfaceVariant : colorScheme.error);
+    final canReplace = state.found;
+    return Container(
+      color: colorScheme.surfaceContainerHighest,
+      padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: query,
+                  autofocus: true,
+                  textInputAction: TextInputAction.search,
+                  onChanged: (_) => onQueryChanged(),
+                  onSubmitted: (_) => onNext(),
+                  style: const TextStyle(fontSize: 14),
+                  decoration: const InputDecoration(
+                    hintText: '查找',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // 固定宽度避免命中数变化时按钮左右跳动。
+              SizedBox(
+                width: 96,
+                child: Text(
+                  state.label,
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: labelColor),
+                ),
+              ),
+              _Btn(icon: Icons.keyboard_arrow_up, tip: '上一个', onTap: onPrev),
+              _Btn(icon: Icons.keyboard_arrow_down, tip: '下一个', onTap: onNext),
+              _Btn(icon: Icons.close, tip: '关闭', onTap: onClose),
+            ],
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: replace,
+                  style: const TextStyle(fontSize: 14),
+                  decoration: const InputDecoration(
+                    hintText: '替换为（留空表示删除）',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: canReplace ? onReplaceOne : null,
+                child: const Text('替换'),
+              ),
+              TextButton(
+                onPressed: canReplace ? onReplaceAll : null,
+                child: const Text('全部替换'),
+              ),
+              _Btn(
+                icon: Icons.text_fields,
+                tip: '区分大小写',
+                active: caseSensitive,
+                onTap: () => onCaseChanged(!caseSensitive),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 底部：提交方式 + 字数。

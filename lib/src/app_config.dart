@@ -64,15 +64,35 @@ abstract final class AppConfig {
   /// `seed` 参数端点并不使用（两个端点都是纯随机），它的作用是**给客户端当缓存键** ——
   /// `CachedNetworkImage` 按 URL 做磁盘缓存，带稳定 seed 才能让同一篇文章的封面
   /// 在 App 内保持一致。
-  static String coverUrl(int seed) => '$_coverBase?img=w&$seed';
+  ///
+  /// [card] 为 true 时请求**卡片小图变体**（`size=card`，站点为每张图备了
+  /// `-card` 后缀的 1200px/q82 版本）。卡片只有 112×112，取 1920 大图纯属浪费流量 ——
+  /// 站点自己的卡片区也是走小图（主题提交 2e4cf822）。
+  static String coverUrl(int seed, {bool card = true}) =>
+      '$_coverBase?img=w${card ? '&size=card' : ''}&$seed';
 
   /// 兜底封面端点（主题内建 REST）。万一 `rand-cover.php` 不可用
   /// （例如主题被换掉、文件被删），卡片会退到这里，而不是直接显示占位图。
+  ///
+  /// ⚠️ 该端点**不认** `size=card`（它只读 `img`），所以兜底路径拿到的是大图 ——
+  /// 这是刻意的：兜底只在轻量端点整个不可用时才发生，此时优先保证「有图」。
   static String coverUrlFallback(int seed) =>
       'https://www.yibianhui.cn/wp-json/sakura/v1/gallery?img=w&$seed';
 
   static const String _coverBase =
       'https://www.yibianhui.cn/wp-content/themes/SakurairoYBH/rand-cover.php';
+
+  /// 批量取封面的地址：服务端**一次抽 N 张互不重复**的图，返回 JSON
+  /// `{"urls":[...]}`（见主题 `rand-cover.php` 的 `n` 分支）。
+  ///
+  /// 为什么用它：一页 20 张卡片按老写法是 20 次 302 往返，还各自带着
+  /// 一次完整请求开销；批量端点一次就够。它与单张模式走的是同一份
+  /// `imglist.json` 索引，**都不加载 WordPress**。
+  ///
+  /// 服务器侧约束（逐条对齐源码）：`n > 1` 才进批量分支；`n` 被夹到 **最多 60**；
+  /// 响应是 `Cache-Control: no-store`（每次都是新的一批，不要指望 HTTP 缓存）。
+  static String batchCoverUrl(int n, {bool card = true, bool wide = true}) =>
+      '$_coverBase?img=${wide ? 'w' : 'l'}${card ? '&size=card' : ''}&n=$n';
 
   /// 每次调用都换一张的随机封面（首页首屏用它当背景，点「换封面」也用它）。
   ///
