@@ -47,9 +47,22 @@ class _YbhAppState extends State<YbhApp> {
 
   bool _darkMode = false;
 
+  /// `MaterialApp` **自己那个** Navigator。
+  ///
+  /// ⚠️ 不能拿 `_YbhAppState.context` 去 `Navigator.of()`：本 State 的 build 返回的
+  /// 就是 `MaterialApp`，所以它的 context 在 MaterialApp **之上**，祖先链里根本没有
+  /// Navigator（Navigator 是 MaterialApp 在**内部**建的）。
+  /// 在那里调用会抛 `Navigator operation requested with a context that does not
+  /// include a Navigator`；而 release 构建不显示异常、手势回调里的异常又不会弹任何
+  /// 界面 ⇒ 用户看到的就是**「点了完全没反应」**（「通知设置」曾经就是这样）。
+  /// 用 navigatorKey 取真正的 NavigatorState 才是正解。
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+
   /// 「通知设置」页入口（由「我的」页调用）。
   Future<void> _openNotificationSettings() async {
-    await Navigator.of(context).push<void>(
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) return;
+    await navigator.push<void>(
       MaterialPageRoute<void>(builder: (_) => const NotificationSettingsPage()),
     );
     // 返回后按新设置重新注册周期任务。
@@ -89,6 +102,8 @@ class _YbhAppState extends State<YbhApp> {
     return MaterialApp(
       title: AppConfig.appName,
       debugShowCheckedModeBanner: false,
+      // 见 _navigatorKey 的注释：跨「MaterialApp 之上」的页面跳转必须用它。
+      navigatorKey: _navigatorKey,
       themeMode: _darkMode ? ThemeMode.dark : ThemeMode.system,
       theme: _buildTheme(primary, dark: false),
       darkTheme: _buildTheme(primary, dark: true),
