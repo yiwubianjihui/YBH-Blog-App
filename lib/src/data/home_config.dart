@@ -255,11 +255,14 @@ class HomeConfig {
         title: 'YBH',
         icon: 'explore',
         subtitle: '网站顶部菜单的主入口',
+        // ⚠️ 这一组**一律走原生**（`app://` 前缀）。原因见 home_tab.dart 的 _openUrl：
+        // 主站子页面在旧 Android WebView 上 DOM 完整却不绘制（整屏纯白），
+        // 注入脚本救不了，只能绕开 WebView。
         links: <HomeLink>[
           HomeLink(
               title: '全部文章',
               subtitle: '按分类浏览全部内容',
-              url: 'https://www.yibianhui.cn/all-articles/',
+              url: 'app://posts',
               icon: 'article'),
           HomeLink(
               title: '标签',
@@ -267,25 +270,21 @@ class HomeConfig {
               url: 'app://tags',
               icon: 'tag'),
           HomeLink(
-              title: '我要投稿',
-              subtitle: '把你的作品发到 YBH',
-              url: 'https://www.yibianhui.cn/submit/',
-              icon: 'edit'),
-          HomeLink(
               title: '更新日志',
               subtitle: '主题与站务改了什么',
-              url: 'https://www.yibianhui.cn/changelog/',
+              url: 'app://page/changelog',
               icon: 'history'),
           HomeLink(
               title: '关于我们',
               subtitle: 'YBH 是什么',
-              url: 'https://www.yibianhui.cn/about/',
+              url: 'app://page/about',
               icon: 'info'),
           HomeLink(
               title: '友情链接',
               subtitle: '和谁在一起玩',
-              url: 'https://www.yibianhui.cn/links/',
+              url: 'app://page/links',
               icon: 'link'),
+          // 「我要投稿」已移除：底部导航栏正中就是「写文章」，重复入口只会让人犹豫。
         ],
       ),
       HomeNavGroup(

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -220,7 +221,7 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   late final WebViewController _controller;
   bool _androidConfigured = false;
 
-  /// 「应用内渲染为空 → 已交给系统浏览器」的一次性闸门，避免反复弹。
+  /// 每个文档只提示一次「应用内渲染为空」的落地卡，避免反复弹。
   bool _handedOff = false;
 
   /// 诊断日志前缀里的 App 版本号（T30：便于按版本区分线上问题）。
@@ -272,6 +273,9 @@ class BlogWebViewState extends State<BlogWebViewPage> {
             _ui.currentUrl.value = url;
             _ui.loading.value = true;
             _ui.hasError.value = false;
+            // 新文档开始：撤掉上一页可能留下的落地卡，并允许本页重新判定一次。
+            _ui.browserFallbackUrl.value = '';
+            _handedOff = false;
             _injectAllowed = _shouldInject(url);
             // 整段字体脚本：新文档的第一次注入，必须带全量替换 CSS。
             _injectPageScript(fullFonts: true);
@@ -488,8 +492,13 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   /// （系统浏览器里同一地址完全正常）。探针显示页面里的 JS 从未执行、DOM 为空，
   /// 也就是说不是「内容在但不可见」，而是压根没渲染出来。
   ///
-  /// 与其让用户对着一片白，不如把这一页交给系统浏览器 —— 这些子站本来也不需要
-  /// App 的任何注入能力（字体本地化 / 性能模式都是为主站 WordPress 主题做的）。
+  /// **处置（2026-09-22 改）**：不再把用户直接踢到系统浏览器，而是在 WebView 上
+  /// 盖一张**应用内落地卡**（见 [WebViewUiState.browserFallbackUrl]）：
+  /// 说清"这页在应用内显示不出来"，给「在浏览器中打开」「复制链接」「重试」三个出口。
+  ///
+  /// ⚠️ 这套探针只能发现「DOM 为空」这一类失败。主站**子页面**（page.php 模板）在
+  /// 旧 Android WebView 上是**DOM 完整但不绘制**——JS 侧的布局树是正常的，
+  /// 探针看不出来。那一类改由**原生入口**绕开（见 home_tab 的 app:// 路由）。
   Future<void> _probeAndMaybeHandOff(String url) async {
     Object? raw;
     try {
@@ -515,13 +524,18 @@ class BlogWebViewState extends State<BlogWebViewPage> {
     if (_shouldInject(url)) return; // 主站不在此列（主站的注入与渲染都正常）
 
     debugPrint('[YBH WebView v$_appVersion] 应用内渲染为空（body $bodyLen 字节）'
-        '→ 改用系统浏览器打开：$url');
-    await _handOffToBrowser(url);
+        '→ 显示应用内落地卡：$url');
+    if (mounted && !_handedOff) {
+      _handedOff = true;
+      _ui.browserFallbackUrl.value = url;
+    }
   }
 
-  Future<void> _handOffToBrowser(String url) async {
-    if (_handedOff) return; // 只交一次，避免来回弹
-    _handedOff = true;
+  /// 用户点了落地卡上的「在浏览器中打开」才真的离开 App。
+  Future<void> openCurrentInBrowser() async {
+    final url = _ui.browserFallbackUrl.value.isNotEmpty
+        ? _ui.browserFallbackUrl.value
+        : _ui.currentUrl.value;
     try {
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     } catch (_) {
@@ -543,11 +557,16 @@ class BlogWebViewState extends State<BlogWebViewPage> {
     _ui.hasError.value = false;
     _ui.loading.value = true;
     _ui.progress.value = 0;
+    // 「重试」要真的重来一遍：撤掉落地卡、放开一次性闸门。
+    _ui.browserFallbackUrl.value = '';
+    _handedOff = false;
     await _controller.reload();
   }
 
   Future<void> goHome() async {
     _ui.hasError.value = false;
+    _ui.browserFallbackUrl.value = '';
+    _handedOff = false;
     await _controller.loadRequest(Uri.parse(AppConfig.blogUrl));
   }
 
@@ -639,6 +658,22 @@ class BlogWebViewState extends State<BlogWebViewPage> {
             );
           },
         ),
+        // 「这一页在应用内显示不出来」的落地卡（独立子站整页白屏时的出口）。
+        // 放在最后 ⇒ 盖在加载动画与错误页之上；用户不点「在浏览器中打开」就不会离开 App。
+        ListenableBuilder(
+          listenable: _ui.browserFallbackUrl,
+          builder: (context, child) {
+            final url = _ui.browserFallbackUrl.value;
+            if (url.isEmpty) return const SizedBox.shrink();
+            return Positioned.fill(
+              child: _SubSiteFallbackView(
+                url: url,
+                onRetry: reload,
+                onOpenBrowser: openCurrentInBrowser,
+              ),
+            );
+          },
+        ),
       ],
     );
   }
@@ -646,7 +681,6 @@ class BlogWebViewState extends State<BlogWebViewPage> {
 
 class _ErrorView extends StatelessWidget {
   const _ErrorView({required this.onRetry, required this.onOpenBrowser});
-
   final VoidCallback onRetry;
   final VoidCallback onOpenBrowser;
 
@@ -687,6 +721,94 @@ class _ErrorView extends StatelessWidget {
                 onPressed: onOpenBrowser,
                 icon: const Icon(Icons.open_in_browser_outlined),
                 label: const Text('用系统浏览器打开'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 独立子站在应用内显示不出来时的**落地卡**（取代过去「直接把人踢到浏览器」）。
+///
+/// 为什么这样做：teacher / brs / game / tools 这些子站在应用内 WebView 里会整页白屏
+/// （同一个地址在系统浏览器里完全正常，已多次对照确认）。旧行为是探到空页就
+/// `launchUrl(external)` —— 用户还没看清自己在哪就离开了 App，观感很差。
+/// 现在留在应用内，说清楚发生了什么，再让用户自己选：
+/// 「在浏览器中打开」/「复制链接」/「重试」。
+class _SubSiteFallbackView extends StatelessWidget {
+  const _SubSiteFallbackView({
+    required this.url,
+    required this.onRetry,
+    required this.onOpenBrowser,
+  });
+
+  final String url;
+  final VoidCallback onRetry;
+  final VoidCallback onOpenBrowser;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final host = Uri.tryParse(url)?.host ?? url;
+    return ColoredBox(
+      color: colorScheme.surface,
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.public_off_outlined,
+                  size: 64, color: colorScheme.primary.withValues(alpha: 0.7)),
+              const SizedBox(height: 18),
+              const Text('这个页面要在浏览器里看',
+                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 10),
+              Text(
+                '$host 是独立部署的站点，应用内无法正常显示它。\n'
+                '用系统浏览器打开即可，功能完全一样。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 13.5, height: 1.6, color: colorScheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                url,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11.5, color: colorScheme.outline),
+              ),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: onOpenBrowser,
+                icon: const Icon(Icons.open_in_browser_outlined),
+                label: const Text('在浏览器中打开'),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  TextButton.icon(
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: url));
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('链接已复制')),
+                      );
+                    },
+                    icon: const Icon(Icons.link, size: 18),
+                    label: const Text('复制链接'),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('重试'),
+                  ),
+                ],
               ),
             ],
           ),

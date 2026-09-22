@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../app_config.dart';
 import '../data/blog_api.dart';
@@ -11,6 +10,7 @@ import '../shell/webview_tab.dart' if (dart.library.html) '../shell/webview_tab_
 import 'page_reader_page.dart';
 import 'post_card.dart';
 import 'post_detail_page.dart';
+import 'posts_tab.dart';
 import 'search_page.dart';
 import 'tags_page.dart';
 
@@ -213,8 +213,18 @@ class _HomeTabState extends State<HomeTab> {
 
   // ------------------------------------------------------------ 打开链接
 
-  /// 打开一个地址：站内留在应用内（WebView），站外同样用应用内 WebView
-  /// （内部导航策略会把站外转交系统浏览器）。
+  /// 打开一个地址。
+  ///
+  /// **优先原生**：配置里用 `app://` 前缀标记「这个入口有原生实现」。
+  /// 为什么必须这样（2026-09-22 实测）：主站的**子页面**（page.php 模板：
+  /// /about/ /links/ /changelog/ …）在旧 Android WebView 上**DOM 完整但不绘制**
+  /// —— 探针能读到 77k 字符的正文，屏幕上却是纯白（首页 `/` 不依赖那条绘制路径，
+  /// 所以「整站」打开首页一直正常）。这是渲染层的问题，注入脚本救不了，
+  /// 因此这些入口一律走原生页，不再经过 WebView。
+  ///
+  /// 其余情况：站内主站留在应用内 WebView；**子站也留在应用内**，
+  /// 由 WebView 的探针在渲染为空时给出落地卡（见 WebViewUiState.browserFallbackUrl），
+  /// 而不是像过去那样直接把用户踢去系统浏览器。
   void _openUrl(String url, String title) {
     if (url.isEmpty) return;
     // 幸运摇人器有原生实现（含语音播报），别让它退化到网页版
@@ -224,37 +234,44 @@ class _HomeTabState extends State<HomeTab> {
       );
       return;
     }
-    // 标签页也是原生实现：用 app:// 前缀在配置里标记，避免为它单开一套 schema。
+    // 标签页（原生标签云）
     if (url.startsWith('app://tags')) {
       Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const TagsPage()),
       );
       return;
     }
-    // ⚠️ 只把**主站**留在应用内 WebView。
-    //
-    // teacher / brs 这类独立子站在应用内 WebView 里会**整页白屏**：
-    // 同一地址在系统浏览器里完全正常，而 App 内不仅看不见内容，
-    // 连页面里的 JS 都不执行（载入探针抛错、字体脚本无回报）——
-    // 说明文档压根没渲染出来。真机对照实验确认，反复调注入策略也没能修好。
-    //
-    // 与其让用户对着一片白，不如交给系统浏览器：这些子站本来也不需要 App 的任何
-    // 注入能力（字体本地化 / 性能模式都是为主站 WordPress 主题做的）。
-    if (!_isMainSite(url)) {
-      launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    // 全部文章（原生列表，复用「文章」页那套）
+    if (url.startsWith('app://posts')) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const _AllArticlesPage()),
+      );
       return;
     }
+    // 站内页面（关于我们 / 友情链接 / 更新日志 …）：原生渲染页面内容。
+    // WordPress 在 content.rendered 里已经把短代码（如 [ybh_changelog]）渲染成 HTML，
+    // 所以原生路径拿到的是与网页端一致的正文。
+    if (url.startsWith('app://page/')) {
+      final slug = url.substring('app://page/'.length).trim();
+      if (slug.isEmpty) return;
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => PageReaderPage(title: title, slug: slug, type: 'page'),
+        ),
+      );
+      return;
+    }
+    // 站内（主站 + 子站）都用应用内 WebView；站外由内部导航策略转交系统浏览器。
+    //
+    // 子站（teacher / brs / game / tools…）在应用内确实可能整页白屏（实测过：
+    // 页面 JS 不执行、DOM 为空，系统浏览器里却完全正常）。但**不再直接把用户踢走**：
+    // WebView 的载入探针会在渲染为空时给出应用内落地卡
+    // （见 WebViewUiState.browserFallbackUrl），由用户点「在浏览器中打开」再离开。
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => _InAppWebPage(title: title, url: url),
       ),
     );
-  }
-
-  /// 是否是主站（含 apex）——只有主站用应用内 WebView。
-  static bool _isMainSite(String url) {
-    final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
-    return host == AppConfig.allowDomain || host == 'www.${AppConfig.allowDomain}';
   }
 
   // ------------------------------------------------------------ 固定链接
@@ -398,6 +415,21 @@ class _HomeTabState extends State<HomeTab> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 「全部文章」原生页：包一层 AppBar + 复用「文章」页那套列表（分类筛选 / 下拉刷新 /
+/// 触底加载）。做成独立路由而不是切到「文章」Tab —— 导航项应当"进入一个页面"，
+/// 切 Tab 会让用户失去返回感。
+class _AllArticlesPage extends StatelessWidget {
+  const _AllArticlesPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('全部文章')),
+      body: const PostsTab(),
     );
   }
 }

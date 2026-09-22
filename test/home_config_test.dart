@@ -28,9 +28,36 @@ void main() {
       for (final g in config.nav)
         for (final l in g.links) l.url,
     ];
-    expect(all, contains('https://www.yibianhui.cn/changelog/'));
+    expect(all, contains('app://page/changelog'));
     expect(config.footer.map((l) => l.title), isNot(contains('更新日志')),
         reason: '站点 1.3.10 起页脚已删掉「更新日志」入口，App 不该再留着');
+  });
+
+  test('★ YBH 组一律走原生路由（不经内嵌 WebView）', () {
+    // 为什么钉这条：主站**子页面**在旧 Android WebView 上 DOM 完整但不绘制
+    // （探针能读到 77k 字符正文，屏幕却纯白），注入脚本救不了 ⇒ 这一组必须原生。
+    // 谁要把它改回 https://…，这个测试会立刻红。
+    final ybh = {
+      for (final l in config.nav.firstWhere((g) => g.title == 'YBH').links)
+        l.title: l.url,
+    };
+    expect(ybh['全部文章'], 'app://posts');
+    expect(ybh['标签'], 'app://tags');
+    expect(ybh['更新日志'], 'app://page/changelog');
+    expect(ybh['关于我们'], 'app://page/about');
+    expect(ybh['友情链接'], 'app://page/links');
+    for (final entry in ybh.entries) {
+      expect(entry.value, startsWith('app://'),
+          reason: '${entry.key} 应走原生路由，实际 ${entry.value}');
+    }
+  });
+
+  test('「我要投稿」已从导航移除（底部栏已有「写文章」）', () {
+    final titles = [
+      for (final g in config.nav)
+        for (final l in g.links) l.title,
+    ];
+    expect(titles, isNot(contains('我要投稿')));
   });
 
   test('新增入口：小游戏 / 试写作业插件', () {
