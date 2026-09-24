@@ -293,35 +293,25 @@ class HomeConfig {
         subtitle: 'YBH 旗下的其他站点与工具',
         links: <HomeLink>[
           HomeLink(
-              title: '小游戏',
-              subtitle: 'YBH 小游戏大厅',
-              url: 'https://game.yibianhui.cn',
-              icon: 'game'),
-          HomeLink(
-              title: '试写作业插件',
-              subtitle: 'ClassIsland 值班插件',
-              url: 'https://tools.yibianhui.cn',
-              icon: 'assignment'),
-          HomeLink(
               title: '幸运摇人器',
               subtitle: '抽一人 / 连抽多人，含语音播报',
+              // 原生页（_openUrl 按域名命中 lr.yibianhui.cn）
               url: 'https://lr.yibianhui.cn',
               icon: 'casino'),
           HomeLink(
-              title: '教师节',
-              subtitle: '教师节祝福墙',
-              url: 'https://teacher.yibianhui.cn',
-              icon: 'school'),
-          HomeLink(
               title: '广播站',
               subtitle: '校园歌单与点歌',
-              url: 'https://brs.yibianhui.cn',
+              // 原生页：读站点公开的 data/data.json（api.php 只有管理端动作）
+              url: 'app://brs',
               icon: 'campaign'),
           HomeLink(
-              title: '客户端下载',
-              subtitle: 'Android 客户端',
-              url: 'https://app.yibianhui.cn',
-              icon: 'download'),
+              title: '更多站点',
+              subtitle: '小游戏 · 试写作业插件 · 教师节',
+              // 二级菜单：这几项只能交给系统浏览器，不该在主菜单占三行
+              url: 'app://sites',
+              icon: 'hub'),
+          // 已删除：「客户端下载」（应用就在用户手上，再给一个下载入口只会让人犹豫）、
+          // 「小游戏」「试写作业插件」「教师节」（折进上面的二级菜单）。
         ],
       ),
     ],

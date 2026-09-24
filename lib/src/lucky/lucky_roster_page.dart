@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../app_config.dart';
 import 'lucky_demo_data.dart';
 import 'lucky_models.dart';
 import 'lucky_picker.dart';
-import 'lucky_roster_source.dart';
 
-/// 名单管理：查看 / 增删改、从服务器获取、粘贴导入、恢复示例名单。
+/// 名单管理：查看 / 增删改、粘贴导入、恢复示例名单。
 ///
 /// 保存后 pop 出新名单，由主页写回本地存储。
 class LuckyRosterPage extends StatefulWidget {
@@ -23,7 +21,6 @@ class _LuckyRosterPageState extends State<LuckyRosterPage> {
   late List<LuckyStudent> _students;
   late Map<String, String> _classes;
   String _query = '';
-  bool _busy = false;
 
   @override
   void initState() {
@@ -100,42 +97,11 @@ class _LuckyRosterPageState extends State<LuckyRosterPage> {
   }
 
   // ------------------------------------------------------------ 名单来源
-
-  Future<void> _fetchFromServer() async {
-    setState(() => _busy = true);
-    final roster = await LuckyRosterFetcher.fetch(AppConfig.luckyRosterUrl);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    if (roster == null || roster.isEmpty) {
-      _toast('服务器上还没有名单，或暂时取不到。可先用粘贴导入。');
-      return;
-    }
-    final ok = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('获取名单'),
-            content: Text(
-                '服务器上共有 ${roster.count} 人。\n确定要替换当前名单吗？'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('替换'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-    if (!ok || !mounted) return;
-    setState(() {
-      _students = [...roster.students];
-      _classes = {...roster.classes};
-    });
-    _toast('已获取 ${roster.count} 人，点右上角「保存」生效');
-  }
+  //
+  // ⚠️ 这里原本有一个 `_fetchFromServer()`：从 app.yibianhui.cn/lucky/roster.json
+  // 拉取「真实名单」。**服务端从来没有这份文件** —— 那是立项时设想的功能，
+  // 从未部署。它的存在只会让用户以为"名单能自动同步"，点了却总是失败。
+  // 已于 2026-09-22 删除；名单的真实来源只有下面两条：粘贴导入、手动添加。
 
   Future<void> _importFromText() async {
     final result = await showModalBottomSheet<LuckyRoster>(
@@ -213,7 +179,7 @@ class _LuckyRosterPageState extends State<LuckyRosterPage> {
       appBar: AppBar(
         title: const Text('名单管理'),
         actions: [
-          TextButton(onPressed: _busy ? null : _save, child: const Text('保存')),
+          TextButton(onPressed: _save, child: const Text('保存')),
         ],
       ),
       body: Column(
@@ -224,24 +190,16 @@ class _LuckyRosterPageState extends State<LuckyRosterPage> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                FilledButton.tonalIcon(
-                  onPressed: _busy ? null : _fetchFromServer,
-                  icon: _busy
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.cloud_download_outlined, size: 18),
-                  label: const Text('从服务器获取'),
-                ),
+                // ⚠️ 「从服务器获取」已删除（2026-09-22）：那个端点是当初设想的功能，
+                // 服务端从来没有这份名单（app.yibianhui.cn/lucky/roster.json 不存在），
+                // 按钮点了只会提示"取不到"。名单只有两条真实来源：粘贴导入、手动添加。
                 OutlinedButton.icon(
-                  onPressed: _busy ? null : _importFromText,
+                  onPressed: _importFromText,
                   icon: const Icon(Icons.content_paste_go_outlined, size: 18),
                   label: const Text('粘贴导入'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: _busy ? null : _editStudent,
+                  onPressed: _editStudent,
                   icon: const Icon(Icons.person_add_outlined, size: 18),
                   label: const Text('手动添加'),
                 ),

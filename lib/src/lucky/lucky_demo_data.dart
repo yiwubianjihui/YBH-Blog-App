@@ -5,7 +5,7 @@ import 'lucky_models.dart';
 /// **刻意只使用虚构姓名**（张三 / 李四 / 王五 ……），不含任何真实学生信息：
 /// 本仓库是公开开源的，真实姓名一旦进库就无法撤回。
 ///
-/// 真实名单请通过「名单管理 → 从服务器获取」下载，或在 App 内导入 CSV，
+/// 真实名单请在 App 内**粘贴导入**（名单管理 → 粘贴导入）或手动添加，
 /// 数据只保存在本机，不会进入版本库。
 const LuckyRoster luckyDemoRoster = LuckyRoster(
   classes: <String, String>{

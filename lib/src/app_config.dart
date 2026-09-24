@@ -28,13 +28,11 @@ abstract final class AppConfig {
   /// 应用主题色（取自站点 theme-color: #505050）。
   static const int themeColorValue = 0xFF505050;
 
-  /// 幸运摇人器的真实名单地址。
-  ///
-  /// 真实名单**不进版本库**（公开仓库会泄露学生姓名），托管在下载站上，
-  /// App 里「名单管理 → 从服务器获取」拉取；更新这个文件即可同步。
-  /// 未部署时返回 404，App 会提示改用粘贴导入。
-  static const String luckyRosterUrl =
-      'https://app.yibianhui.cn/lucky/roster.json';
+  // ⚠️ 这里曾经有 `luckyRosterUrl`（app.yibianhui.cn/lucky/roster.json）与
+  // 「名单管理 → 从服务器获取」入口。**服务端从来没有部署过这份名单** ——
+  // 那是立项时的设想，实现却只做了一半：App 侧有按钮，服务器侧没文件，
+  // 用户点了永远只会得到"取不到"。2026-09-22 已连同 `LuckyRosterFetcher`
+  // 一并删除；名单的真实来源只有两条：粘贴导入、手动添加（都只存本机）。
 
   /// 首页配置：固定链接、展台公告与精选。未部署时 App 用内置兜底。
   static const String homeConfigUrl =

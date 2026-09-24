@@ -16,7 +16,7 @@ import 'lucky_tts.dart';
 /// 功能对齐桌面版：班级 / 性别筛选、不重复模式、抽一人 / 连抽多人、
 /// 屏蔽名单、重置池、语音播报、抽选记录、名单管理。
 ///
-/// 名单默认使用内置示例数据（虚构姓名），真实名单可从服务器获取或导入，
+/// 名单默认使用内置示例数据（虚构姓名），真实名单用「粘贴导入」或手动添加，
 /// 只存在本机，不会进入版本库。
 class LuckyPage extends StatefulWidget {
   const LuckyPage({super.key});
@@ -583,7 +583,7 @@ class _LuckyPageState extends State<LuckyPage> {
           const SizedBox(height: 6),
           Text(
             '为了不把真实姓名放进公开仓库，内置名单用的是虚构名字。'
-            '点右上角「名单管理」可从服务器获取真实名单，或导入 CSV。',
+            '点右上角「名单管理」可粘贴导入名单，或手动添加。',
             style: TextStyle(
               fontSize: 12.5,
               height: 1.6,

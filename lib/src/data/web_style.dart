@@ -219,7 +219,7 @@ pre { position: relative; }
 .ybh-article-head { margin: 0 0 1.1em; }
 .ybh-article-head .ybh-title {
   margin: 0 0 .42em;
-  font-size: 1.38em;
+  font-size: 1.5em;
   line-height: 1.4;
   font-weight: 700;
 }
@@ -228,10 +228,29 @@ pre { position: relative; }
   flex-wrap: wrap;
   gap: .4em .9em;
   align-items: center;
-  font-size: .68em;
+  font-size: .7em;
   opacity: .72;
 }
 .ybh-article-meta .ybh-cat { color: var(--theme-skin, #505050); }
+
+/* ===== 正文与各级标题的字号刻度（2026-09-22 实测后加的）=====
+   问题：真机上「只有正文小」——量出来是**站点在移动端的媒体查询里把 .entry-content
+   压到了 16px**，而 body 仍是 20px，于是一屏里正文比正文之外的任何东西都小，
+   层级是散的（内容风格 github.css 那套标题 32/24/20/16/14/12 更是把 h4/h5/h6
+   压到正文之下）。
+
+   做法：在阅读器里**以正文为基准重建一条单调递减的刻度**，不再继承站点的移动端压缩。
+   选择器**不带 .ybh-shell 前缀** —— 本样式是最后注入的，同特指度下后声明者胜；
+   实测（`_probe_dir/reader_typography.js`，411×731 真机视口）正文 16 → 20px。 */
+.entry-content { font-size: 20px; line-height: 1.85; }
+.entry-content p, .entry-content li { font-size: 1em; }
+.entry-content h1 { font-size: 1.5em; }
+.entry-content h2 { font-size: 1.28em; }
+.entry-content h3 { font-size: 1.14em; }
+.entry-content h4 { font-size: 1.04em; }
+.entry-content h5, .entry-content h6 { font-size: 1em; }
+.entry-content blockquote, .entry-content blockquote p { font-size: .96em; }
+.entry-content pre, .entry-content pre code, .entry-content code { font-size: .88em; }
 body.dark .ybh-article-meta .ybh-cat { color: #a4cdf6; }
 ''';
 

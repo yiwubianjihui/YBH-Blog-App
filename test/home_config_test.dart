@@ -13,12 +13,6 @@ import 'package:yibianhui_blog/src/data/home_config.dart';
 void main() {
   const config = HomeConfig.fallback;
 
-  List<String> titlesOf(String group) => [
-        for (final g in config.nav)
-          if (g.title == group)
-            for (final l in g.links) l.title,
-      ];
-
   test('导航分组名与站点一致（YBH / 项目）', () {
     expect(config.nav.map((g) => g.title).toList(), ['YBH', '项目']);
   });
@@ -60,14 +54,25 @@ void main() {
     expect(titles, isNot(contains('我要投稿')));
   });
 
-  test('新增入口：小游戏 / 试写作业插件', () {
-    expect(titlesOf('项目'), containsAll(<String>['小游戏', '试写作业插件']));
+  test('★「项目」组重排：广播站原生、其余折进二级菜单、删掉客户端下载', () {
     final urls = {
-      for (final g in config.nav)
-        for (final l in g.links) l.title: l.url,
+      for (final l in config.nav.firstWhere((g) => g.title == '项目').links)
+        l.title: l.url,
     };
-    expect(urls['小游戏'], 'https://game.yibianhui.cn');
-    expect(urls['试写作业插件'], 'https://tools.yibianhui.cn');
+    // 只剩三项：摇人器（原生）、广播站（原生）、更多站点（二级菜单）
+    expect(urls.keys.toList(), ['幸运摇人器', '广播站', '更多站点']);
+    expect(urls['广播站'], 'app://brs');
+    expect(urls['更多站点'], 'app://sites');
+    // 摇人器仍以域名命中原生页（见 home_tab._openUrl），不走 WebView
+    expect(urls['幸运摇人器'], 'https://lr.yibianhui.cn');
+
+    // 这三项不再直接占主菜单：它们在应用内 WebView 里整页白屏，只能交给浏览器，
+    // 现在统一折进「更多站点」二级菜单（清单见 home_tab._moreSites）。
+    expect(urls.containsKey('小游戏'), isFalse);
+    expect(urls.containsKey('试写作业插件'), isFalse);
+    expect(urls.containsKey('教师节'), isFalse);
+    // 用户明确要求删掉
+    expect(urls.containsKey('客户端下载'), isFalse);
   });
 
   test('图标名都能解析（否则会静默退成通用链接图标）', () {

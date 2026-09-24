@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_config.dart';
 import '../data/blog_api.dart';
@@ -7,10 +8,11 @@ import '../data/site_stats.dart';
 import '../lucky/lucky_page.dart';
 import '../shell/webview_ui_state.dart';
 import '../shell/webview_tab.dart' if (dart.library.html) '../shell/webview_tab_stub.dart';
+import 'article_calendar_page.dart';
+import 'brs_page.dart';
 import 'page_reader_page.dart';
 import 'post_card.dart';
 import 'post_detail_page.dart';
-import 'posts_tab.dart';
 import 'search_page.dart';
 import 'tags_page.dart';
 
@@ -241,10 +243,10 @@ class _HomeTabState extends State<HomeTab> {
       );
       return;
     }
-    // 全部文章（原生列表，复用「文章」页那套）
+    // 全部文章（列表 + 日历两种看法；日历是为了与底部「文章」Tab 区分开）
     if (url.startsWith('app://posts')) {
       Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const _AllArticlesPage()),
+        MaterialPageRoute<void>(builder: (_) => const ArticleCalendarPage()),
       );
       return;
     }
@@ -261,6 +263,19 @@ class _HomeTabState extends State<HomeTab> {
       );
       return;
     }
+    // 广播站：原生实现（读它的公开 data.json）。brs 是独立静态子站，
+    // 在应用内 WebView 里整页白屏，但数据是公开 JSON，原生渲染更稳也更快。
+    if (url.startsWith('app://brs')) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const BrsPage()),
+      );
+      return;
+    }
+    // 二级菜单：不能原生、只能靠浏览器的站点折叠到这里，一次列出。
+    if (url.startsWith('app://sites')) {
+      _showMoreSites(title);
+      return;
+    }
     // 站内（主站 + 子站）都用应用内 WebView；站外由内部导航策略转交系统浏览器。
     //
     // 子站（teacher / brs / game / tools…）在应用内确实可能整页白屏（实测过：
@@ -271,6 +286,63 @@ class _HomeTabState extends State<HomeTab> {
       MaterialPageRoute<void>(
         builder: (_) => _InAppWebPage(title: title, url: url),
       ),
+    );
+  }
+
+  /// 「更多站点」二级菜单：把**只能交给浏览器**的独立子站折叠到这里。
+  ///
+  /// 这些站点在应用内 WebView 里整页白屏（DOM 为空、JS 不执行），系统浏览器里完全正常。
+  /// 与其在主菜单摆一排点开是白屏的入口，不如收进二级菜单并明确标注"会在浏览器里打开"。
+  ///
+  /// ⚠️ 清单与 `home/config.json` 的 `nav` 已移除的那几项保持同步（远端不再含它们，
+  /// 所以这里写死；增删站点改这一处即可）。
+  static const List<(String, String, IconData)> _moreSites = [
+    ('小游戏', 'https://game.yibianhui.cn', Icons.sports_esports_outlined),
+    ('试写作业插件', 'https://tools.yibianhui.cn', Icons.assignment_outlined),
+    ('教师节', 'https://teacher.yibianhui.cn', Icons.school_outlined),
+  ];
+
+  void _showMoreSites(String title) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final colorScheme = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+                child: Row(children: [
+                  Icon(Icons.public, size: 18, color: colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Text(title.isEmpty ? '更多站点' : title,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                ]),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text('这些站点在应用内显示不出来，会在系统浏览器里打开。',
+                    style: TextStyle(fontSize: 12.5, color: colorScheme.outline)),
+              ),
+              for (final s in _moreSites)
+                ListTile(
+                  leading: Icon(s.$3, color: colorScheme.primary),
+                  title: Text(s.$1, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: Text(s.$2, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: colorScheme.outline)),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    launchUrl(Uri.parse(s.$2), mode: LaunchMode.externalApplication);
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -415,21 +487,6 @@ class _HomeTabState extends State<HomeTab> {
           ),
         ),
       ],
-    );
-  }
-}
-
-/// 「全部文章」原生页：包一层 AppBar + 复用「文章」页那套列表（分类筛选 / 下拉刷新 /
-/// 触底加载）。做成独立路由而不是切到「文章」Tab —— 导航项应当"进入一个页面"，
-/// 切 Tab 会让用户失去返回感。
-class _AllArticlesPage extends StatelessWidget {
-  const _AllArticlesPage();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('全部文章')),
-      body: const PostsTab(),
     );
   }
 }

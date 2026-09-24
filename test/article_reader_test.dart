@@ -39,6 +39,19 @@ void main() {
       expect(html, contains('overflow-y: auto'));
     });
 
+    test('★ 正文与标题的字号刻度是显式写死的（不继承站点移动端的压缩）', () {
+      // 实测（411×731 真机视口）：站点在移动端把 .entry-content 压到 16px，
+      // 而 body 是 20px ⇒ 一屏里正文比别的都小。阅读器必须以正文为基准重建刻度。
+      final html = ArticleWebView.buildHtml(content: '<p>x</p>', dark: false);
+      expect(html, contains('.entry-content { font-size: 20px'));
+      expect(html, contains('.entry-content h2 { font-size: 1.28em'));
+      expect(html, contains('.entry-content h3 { font-size: 1.14em'));
+      expect(html, contains('.entry-content h4 { font-size: 1.04em'));
+      // 标题与元信息也跟着刻度走
+      expect(html, contains('font-size: 1.5em'));
+      expect(html, contains('font-size: .7em'));
+    });
+
     test('深色模式走网页端机制（body.dark + data-theme）', () {
       final html = ArticleWebView.buildHtml(
         content: '',

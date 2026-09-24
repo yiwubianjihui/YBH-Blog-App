@@ -122,12 +122,18 @@ abstract final class BlogApi {
   ///
   /// [categoryId] 为 null 时拉取全部；[search] 非空时按关键词搜索
   /// （匹配标题与正文）；[page] 从 1 开始。
+  ///
+  /// [after] / [before] 是 WordPress 的**日期区间**过滤（ISO8601，站内时间），
+  /// 「全部文章」的日历视图用它一次取回一整个月的文章，再按天归档
+  /// —— 比逐天请求少 30 倍的往返。
   static Future<PostsPage> fetchPosts({
     int? categoryId,
     int? tagId,
     String? search,
     int page = 1,
     int perPage = 20,
+    String? after,
+    String? before,
   }) async {
     final uri = Uri.parse('${AppConfig.apiBase}/posts').replace(
       queryParameters: {
@@ -139,6 +145,8 @@ abstract final class BlogApi {
         if (categoryId != null) 'categories': '$categoryId',
         if (tagId != null) 'tags': '$tagId',
         if (search != null && search.isNotEmpty) 'search': search,
+        if (after != null && after.isNotEmpty) 'after': after,
+        if (before != null && before.isNotEmpty) 'before': before,
       },
     );
     final response = await http.get(uri).timeout(_timeout);
