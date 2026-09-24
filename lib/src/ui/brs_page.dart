@@ -22,6 +22,55 @@ class BrsPage extends StatefulWidget {
   /// 线上数据地址（公开可读，实测 HTTP 200 / application/json / 43 KB）。
   static const String dataUrl = 'https://brs.yibianhui.cn/data/data.json';
 
+  /// 解析站点 `data/data.json` → 规范化结构（校区 → 期 → 曲目）。
+  ///
+  /// **独立成公开静态方法是为了能单测**：真机上这个入口要先滚到列表底部再点，
+  /// 而这台设备的输入事件会延迟/落到相邻项，UI 路径很难稳定复现；
+  /// 可字段名写错（`title` / `artist` / `by` / `campuses`）恰恰只会在真机上暴露
+  /// ⇒ 用单测兜住。字段名只在这里出现一次，`_load()` 也走它，避免两处各解析一遍。
+  static List<Map<String, dynamic>> parseCampuses(String body) {
+    Object? decoded;
+    try {
+      decoded = jsonDecode(body);
+    } catch (_) {
+      return const [];
+    }
+    if (decoded is! Map<String, dynamic>) return const [];
+    final raw = decoded['campuses'];
+    if (raw is! Map<String, dynamic>) return const [];
+
+    String s(Object? v) => ((v as String?) ?? '').trim();
+    final out = <Map<String, dynamic>>[];
+    for (final entry in raw.entries) {
+      final v = entry.value;
+      if (v is! Map<String, dynamic>) continue;
+      final label = s(v['label']);
+      out.add({
+        'key': entry.key,
+        'label': label.isEmpty ? entry.key : label,
+        'notice': s(v['notice']),
+        'playlists': <Map<String, dynamic>>[
+          for (final p in (v['playlists'] as List? ?? const []))
+            if (p is Map<String, dynamic>)
+              {
+                'date': s(p['date']),
+                'note': s(p['note']),
+                'songs': <Map<String, String>>[
+                  for (final song in (p['songs'] as List? ?? const []))
+                    if (song is Map<String, dynamic>)
+                      {
+                        'title': s(song['title']),
+                        'artist': s(song['artist']),
+                        'by': s(song['by']),
+                      },
+                ],
+              },
+        ],
+      });
+    }
+    return out;
+  }
+
   @override
   State<BrsPage> createState() => _BrsPageState();
 }
@@ -37,17 +86,15 @@ class _Campus {
 
   int get songCount => playlists.fold(0, (a, p) => a + p.songs.length);
 
-  static _Campus fromJson(String key, Map<String, dynamic> j) => _Campus(
-        key: key,
-        label: (j['label'] as String?)?.trim().isNotEmpty == true
-            ? (j['label'] as String).trim()
-            : key,
-        notice: ((j['notice'] as String?) ?? '').trim(),
-        playlists: (j['playlists'] as List?)
-                ?.whereType<Map<String, dynamic>>()
-                .map(_Playlist.fromJson)
-                .toList() ??
-            const <_Playlist>[],
+  /// 从 [BrsPage.parseCampuses] 的规范化结果构造（字段名解析只在那一个地方）。
+  static _Campus fromMap(Map<String, dynamic> m) => _Campus(
+        key: (m['key'] as String?) ?? '',
+        label: (m['label'] as String?) ?? '',
+        notice: (m['notice'] as String?) ?? '',
+        playlists: [
+          for (final p in (m['playlists'] as List? ?? const []))
+            if (p is Map<String, dynamic>) _Playlist.fromMap(p),
+        ],
       );
 }
 
@@ -59,14 +106,13 @@ class _Playlist {
   final String note;
   final List<_Song> songs;
 
-  static _Playlist fromJson(Map<String, dynamic> j) => _Playlist(
-        date: ((j['date'] as String?) ?? '').trim(),
-        note: ((j['note'] as String?) ?? '').trim(),
-        songs: (j['songs'] as List?)
-                ?.whereType<Map<String, dynamic>>()
-                .map(_Song.fromJson)
-                .toList() ??
-            const <_Song>[],
+  static _Playlist fromMap(Map<String, dynamic> m) => _Playlist(
+        date: (m['date'] as String?) ?? '',
+        note: (m['note'] as String?) ?? '',
+        songs: [
+          for (final s in (m['songs'] as List? ?? const []))
+            if (s is Map<String, dynamic>) _Song.fromMap(s),
+        ],
       );
 }
 
@@ -78,10 +124,10 @@ class _Song {
   final String artist;
   final String by;
 
-  static _Song fromJson(Map<String, dynamic> j) => _Song(
-        title: ((j['title'] as String?) ?? '').trim(),
-        artist: ((j['artist'] as String?) ?? '').trim(),
-        by: ((j['by'] as String?) ?? '').trim(),
+  static _Song fromMap(Map<String, dynamic> m) => _Song(
+        title: (m['title'] as String?) ?? '',
+        artist: (m['artist'] as String?) ?? '',
+        by: (m['by'] as String?) ?? '',
       );
 }
 
@@ -104,20 +150,16 @@ class _BrsPageState extends State<BrsPage> {
           .get(Uri.parse(BrsPage.dataUrl))
           .timeout(const Duration(seconds: 20));
       if (resp.statusCode != 200) throw StateError('HTTP ${resp.statusCode}');
-      final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
-      if (decoded is! Map<String, dynamic>) throw StateError('返回不是对象');
-      final campuses = <_Campus>[];
-      final raw = decoded['campuses'];
-      if (raw is Map<String, dynamic>) {
-        for (final e in raw.entries) {
-          final v = e.value;
-          if (v is Map<String, dynamic>) campuses.add(_Campus.fromJson(e.key, v));
-        }
-      }
+      final text = utf8.decode(resp.bodyBytes);
+      // 解析走 BrsPage.parseCampuses（字段名只有那一处，单测覆盖它）
+      final campuses = [
+        for (final c in BrsPage.parseCampuses(text)) _Campus.fromMap(c),
+      ];
+      final updated = (jsonDecode(text) as Map<String, dynamic>)['updated_at'];
       if (!mounted) return;
       setState(() {
         _campuses = campuses;
-        _updatedAt = ((decoded['updated_at'] as String?) ?? '').trim();
+        _updatedAt = ((updated as String?) ?? '').trim();
         _loading = false;
         _error = null;
       });
