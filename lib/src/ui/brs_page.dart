@@ -54,6 +54,10 @@ class BrsPage extends StatefulWidget {
             if (p is Map<String, dynamic>)
               {
                 'date': s(p['date']),
+                // period 是同一日期内的期次标识（n1 / n2 / … / 「成品混音」），
+                // 天数相同而期次不同时**必须**显示它，否则一屏会出现好几张
+                // 看起来一模一样的卡片（2026-09-07 就有 n1–n5 五期）。
+                'period': s(p['period']),
                 'note': s(p['note']),
                 'songs': <Map<String, String>>[
                   for (final song in (p['songs'] as List? ?? const []))
@@ -100,14 +104,23 @@ class _Campus {
 
 /// 一期歌单。
 class _Playlist {
-  _Playlist({required this.date, required this.note, required this.songs});
+  _Playlist({required this.date, required this.period, required this.note, required this.songs});
 
   final String date;
+  final String period;
   final String note;
   final List<_Song> songs;
 
+  /// 卡片标题：`2026-09-07 · n2`（period 为空时只给日期）。
+  String get title {
+    if (date.isEmpty && period.isEmpty) return '（未标日期）';
+    if (period.isEmpty) return date.isEmpty ? '（未标日期）' : date;
+    return date.isEmpty ? period : '$date · $period';
+  }
+
   static _Playlist fromMap(Map<String, dynamic> m) => _Playlist(
         date: (m['date'] as String?) ?? '',
+        period: (m['period'] as String?) ?? '',
         note: (m['note'] as String?) ?? '',
         songs: [
           for (final s in (m['songs'] as List? ?? const []))
@@ -281,7 +294,8 @@ class _BrsPageState extends State<BrsPage> {
 
   Widget _playlistCard(BuildContext context, _Playlist p) {
     final colorScheme = Theme.of(context).colorScheme;
-    final title = p.date.isEmpty ? '（未标日期）' : p.date;
+    // 标题带期次（p.title 里已含处理逻辑）：同一天的多期才不会看起来一样
+    final title = p.title;
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       clipBehavior: Clip.antiAlias,

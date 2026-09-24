@@ -41,6 +41,19 @@ void main() {
     expect(c[1]['label'], '北校区');
   });
 
+  test('★ 期次 period 必须解析出来（同一天的多期靠它区分）', () {
+    // 线上 2026-09-07 有 n1–n5 五期、日期完全相同；不显示 period 的话
+    // 一屏会出现五张看起来一模一样的卡片（真机截图确认过）。
+    final c = BrsPage.parseCampuses(
+        '{"campuses":{"n":{"label":"北","notice":"","playlists":['
+        '{"date":"2026-09-07","period":"n2","note":"","songs":[]},'
+        '{"date":"2026-07-24","period":"成品混音","note":"第8期","songs":[]}'
+        ']}}}');
+    final lists = c.single['playlists'] as List;
+    expect((lists[0] as Map)['period'], 'n2');
+    expect((lists[1] as Map)['period'], '成品混音');
+  });
+
   test('公告与期次、曲目字段都正确落到目标键上', () {
     final c = BrsPage.parseCampuses(sample);
     final north = c[1];
