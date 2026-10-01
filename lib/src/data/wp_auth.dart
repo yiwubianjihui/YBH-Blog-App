@@ -424,45 +424,216 @@ class WpAuth {
     await _persist();
   }
 
-  /// 拉取「我的文章」列表（当前登录用户）。
+  /// 拉取「我的文章」列表（当前登录用户，含草稿 / 待审核）。
   ///
   /// 会带上「草稿 / 待审核」一起拉，方便投稿者看到自己刚提交的内容；
   /// 若站点不接受该参数（老版本 WP 或权限限制），自动退回只拉已发布。
+  ///
+  /// 0.0.27：带认证的请求会顺带要 `context=edit`（拿 `content.raw`，编辑时
+  /// 才能拿到未经 `the_content` 过滤的原文）；并按 `X-WP-TotalPages` 翻页拉全
+  /// —— 之前只拉第一页 20 篇，发文多的作者（编辑 / 管理员）第 21 篇起永远看不到。
   Future<List<PostSummary>> fetchMyPosts({int page = 1, int perPage = 20}) async {
     if (!isLoggedIn) return const [];
     // JWT 但未能拿到用户 id（极少见的兜底情况）：不按作者过滤会拉全站，
     // 这里直接返回空，避免误展示他人文章。
     if (_user == null || _user!.id == 0) return const [];
 
-    Future<List<PostSummary>> request(List<String> statuses) async {
-      final uri = Uri.parse('${AppConfig.apiBase}/posts').replace(
-        queryParameters: {
+    /// [withEditContext] 为 true 时带 `context=edit`（拿 raw 正文）。
+    /// 失败（部分安全插件会拦）自动退回普通请求。
+    Future<List<PostSummary>> request(
+      List<String> statuses, {
+      bool withEditContext = false,
+      int totalPages = 1,
+    }) async {
+      final all = <PostSummary>[];
+      for (var p = 1; p <= totalPages; p++) {
+        final query = <String, String>{
           'per_page': '$perPage',
-          'page': '$page',
+          'page': '$p',
           'author': '${_user!.id}',
           '_embed': '1',
           'orderby': 'date',
           'order': 'desc',
           'status': statuses.join(','),
-        },
-      );
-      final response =
-          await http.get(uri, headers: authHeaders).timeout(_timeout);
-      if (response.statusCode != 200) {
-        throw StateError('HTTP ${response.statusCode}');
+        };
+        if (withEditContext) query['context'] = 'edit';
+        final uri = Uri.parse('${AppConfig.apiBase}/posts')
+            .replace(queryParameters: query);
+        final response =
+            await http.get(uri, headers: authHeaders).timeout(_timeout);
+        if (response.statusCode != 200) {
+          throw StateError('HTTP ${response.statusCode}');
+        }
+        // 从响应头读总页数（仅首页时能拿到；翻页循环的次数以首页为准）。
+        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        if (decoded is! List) break;
+        all.addAll(decoded
+            .whereType<Map<String, dynamic>>()
+            .map(PostSummary.fromJson)
+            .toList());
+        if (p == 1) {
+          final tp = int.tryParse(response.headers['x-wp-totalpages'] ?? '');
+          if (tp != null && tp > 1 && totalPages == 1 && tp <= 10) {
+            return request(
+              statuses,
+              withEditContext: withEditContext,
+              totalPages: tp,
+            );
+          }
+        }
       }
+      return all;
+    }
+
+    try {
+      return await request(const ['publish', 'draft', 'pending', 'future'],
+          withEditContext: true);
+    } catch (_) {
+      try {
+        return await request(const ['publish', 'draft', 'pending', 'future']);
+      } catch (_) {
+        return request(const ['publish']);
+      }
+    }
+  }
+
+  /// 更新已有文章（App 内编辑）。
+  ///
+  /// 权限与站点 `/write/`（`ybh_front_save`）完全同一套：
+  ///   · 服务端 `current_user_can('edit_post', id)` 裁决 —— 自己的文章都能改
+  ///     （主题已给投稿者补了 `edit_published_posts`）；
+  ///   · **已发布文章 + 无 `publish_posts`** ⇒ 改动后退回「待审核」二次审核
+  ///     —— 服务端会强制这样做，这里提前在本地完成同样的降级并如实告知，
+  ///     避免用户以为"改完还是已发布"。
+  ///   · 请求 'publish' 被服务端 403 拒绝时（能力未知的情况），用 pending 重试一次。
+  ///
+  /// [status] 只接受 publish / draft / pending；null 表示不改变状态。
+  Future<PublishResult> updatePost({
+    required int postId,
+    String? title,
+    String? content,
+    bool contentIsHtml = false,
+    String? status,
+    List<int>? categories,
+  }) async {
+    if (!isLoggedIn) {
+      return const PublishResult.failure('尚未登录，请先登录后再编辑');
+    }
+    // 与新建投稿同一层保护：无发布权 + 原文已发布 ⇒ 主动降级为待审核。
+    String? effective = status;
+    if (status == 'publish' && !(_user?.canPublish ?? true)) {
+      effective = 'pending';
+    }
+    final first = await _patchPost(
+      postId: postId,
+      title: title,
+      content: content,
+      contentIsHtml: contentIsHtml,
+      status: effective,
+      categories: categories,
+    );
+    if (first.ok) return first;
+    // 第二层：能力未知导致被 403 拒 ⇒ 用待审核重试一次。
+    if (status == 'publish' &&
+        effective == 'publish' &&
+        first.statusCode == 403) {
+      final retry = await _patchPost(
+        postId: postId,
+        title: title,
+        content: content,
+        contentIsHtml: contentIsHtml,
+        status: 'pending',
+        categories: categories,
+      );
+      if (retry.ok) return retry.copyWithDowngraded();
+      return retry;
+    }
+    return first;
+  }
+
+  Future<PublishResult> _patchPost({
+    required int postId,
+    String? title,
+    String? content,
+    required bool contentIsHtml,
+    String? status,
+    List<int>? categories,
+  }) async {
+    final body = <String, dynamic>{
+      ?title: title,
+      if (content != null)
+        'content': contentIsHtml ? content : _wrapParagraphs(content),
+      ?status: status,
+      if (categories != null && categories.isNotEmpty) 'categories': categories,
+    };
+    if (body.isEmpty) {
+      return const PublishResult.failure('没有需要保存的修改');
+    }
+    final http.Response response;
+    try {
+      response = await http
+          .post(
+            Uri.parse('${AppConfig.apiBase}/posts/$postId'),
+            headers: {
+              ...authHeaders,
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode(body),
+          )
+          .timeout(_timeout);
+    } catch (e) {
+      return PublishResult.failure('网络异常：$e');
+    }
+
+    Map<String, dynamic>? json;
+    try {
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) json = decoded;
+    } catch (_) {
+      // 非 JSON 响应（如网关返回 HTML 错误页）。
+    }
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final link = json?['link'] as String?;
+      return PublishResult.success(
+        status: (json?['status'] as String?) ?? (status ?? ''),
+        link: (link == null || link.isEmpty) ? AppConfig.blogUrl : link,
+      );
+    }
+    // 令牌过期时顺手清掉本地会话，让「我的」页回到未登录态，用户才知道要重新登录
+    await _handleIfSessionExpired(json?['message'] as String?);
+    return PublishResult.failure(
+      _serverMessage(json, response.statusCode),
+      statusCode: response.statusCode,
+    );
+  }
+
+  /// 拉取标签（编辑器给「已发布文章」补标签用；按名称搜索，空 [search] 返回热门标签）。
+  Future<List<({int id, String name})>> fetchTags({String search = ''}) async {
+    if (!isLoggedIn) return const [];
+    final query = <String, String>{
+      'per_page': '20',
+      'orderby': 'count',
+      'order': 'desc',
+    };
+    if (search.trim().isNotEmpty) query['search'] = search.trim();
+    final uri =
+        Uri.parse('${AppConfig.apiBase}/tags').replace(queryParameters: query);
+    try {
+      final response = await http.get(uri, headers: authHeaders).timeout(_timeout);
+      if (response.statusCode != 200) return const [];
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
       if (decoded is! List) return const [];
       return decoded
           .whereType<Map<String, dynamic>>()
-          .map(PostSummary.fromJson)
+          .map((t) => (
+                id: (t['id'] as num?)?.toInt() ?? 0,
+                name: (t['name'] as String?) ?? '',
+              ))
+          .where((t) => t.id > 0 && t.name.isNotEmpty)
           .toList();
-    }
-
-    try {
-      return await request(const ['publish', 'draft', 'pending', 'future']);
     } catch (_) {
-      return request(const ['publish']);
+      return const [];
     }
   }
 

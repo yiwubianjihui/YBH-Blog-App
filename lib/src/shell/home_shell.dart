@@ -437,10 +437,13 @@ class _HomeShellPageState extends State<HomeShellPage> {
         } else if (index == 3) {
           _selectTab(3);
         } else if (index == 4) {
-          _shareSite();
+          // 抽屉里的「我的文章」：先去「我的」页再看列表（列表就在那）。
+          _selectTab(3);
         } else if (index == 5) {
-          _openSiteInBrowser();
+          _shareSite();
         } else if (index == 6) {
+          _openSiteInBrowser();
+        } else if (index == 7) {
           _copySiteUrl();
         }
       },
@@ -500,6 +503,10 @@ class _HomeShellPageState extends State<HomeShellPage> {
         const NavigationDrawerDestination(
           icon: Icon(Icons.person_outline),
           label: Text('我的'),
+        ),
+        const NavigationDrawerDestination(
+          icon: Icon(Icons.edit_note_outlined),
+          label: Text('我的文章'),
         ),
         const Divider(height: 1, indent: 12, endIndent: 12),
         const NavigationDrawerDestination(

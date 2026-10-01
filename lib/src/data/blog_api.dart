@@ -33,6 +33,8 @@ class PostSummary {
     required this.link,
     required this.terms,
     this.status = 'publish',
+    this.rawContent,
+    this.authorId,
   });
 
   final int id;
@@ -45,6 +47,19 @@ class PostSummary {
 
   /// 文章状态：publish / draft / pending / future / private。
   final String status;
+
+  /// 未过滤的正文原文（`content.raw`，仅带认证的 `context=edit` 请求才有）。
+  /// 编辑器用它回填 —— `content.rendered` 是服务端渲染后的成品，
+  /// 再编辑会把渲染痕迹（脚注展开、短代码替换等）固化进正文。
+  final String? rawContent;
+
+  /// 作者 ID（`context=edit` 或标准响应里都有；「我的文章」里用于判断归属）。
+  final int? authorId;
+
+  /// 编辑回填用的正文：优先 raw，退回 rendered。
+  String get editableContent => (rawContent != null && rawContent!.isNotEmpty)
+      ? rawContent!
+      : content;
 
   /// 非已发布状态的中文标签（用于在列表中提示投稿进度）。
   String? get statusLabel => switch (status) {
@@ -92,9 +107,11 @@ class PostSummary {
       title: _decodeHtml((json['title'] as Map?)?['rendered'] as String? ?? ''),
       excerpt: _stripHtml((json['excerpt'] as Map?)?['rendered'] as String? ?? ''),
       content: (json['content'] as Map?)?['rendered'] as String? ?? '',
+      rawContent: (json['content'] as Map?)?['raw'] as String?,
       link: (json['link'] as String?) ?? AppConfig.blogUrl,
       terms: terms,
       status: (json['status'] as String?) ?? 'publish',
+      authorId: (json['author'] as num?)?.toInt(),
     );
   }
 }

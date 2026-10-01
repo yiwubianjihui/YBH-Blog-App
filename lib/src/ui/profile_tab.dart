@@ -9,6 +9,7 @@ import '../data/blog_api.dart';
 import '../data/category_order.dart';
 import '../data/update_checker.dart';
 import '../data/wp_auth.dart';
+import 'editor_page.dart';
 import 'notification_center_page.dart';
 import 'post_card.dart';
 import 'post_detail_page.dart';
@@ -55,6 +56,15 @@ class _ProfileTabState extends State<ProfileTab> {
     _loadVersion();
     _loadCategoryPrefs();
     if (wpAuth.isLoggedIn) _loadMyPosts();
+  }
+
+  /// 编辑某篇文章，返回后刷新列表（改完状态会变：投稿者改已发布 → 回待审核）。
+  Future<void> _editPost(PostSummary post) async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => EditorPage(post: post)),
+    );
+    if (!mounted) return;
+    _loadMyPosts();
   }
 
   @override
@@ -295,6 +305,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 ),
               ),
             ),
+            onEdit: _editPost,
           ),
           const SizedBox(height: 24),
         ],
@@ -684,6 +695,7 @@ class _MyPostsList extends StatelessWidget {
     required this.posts,
     required this.onRetry,
     required this.onOpen,
+    required this.onEdit,
   });
 
   final bool loading;
@@ -691,6 +703,7 @@ class _MyPostsList extends StatelessWidget {
   final List<PostSummary> posts;
   final VoidCallback onRetry;
   final void Function(int) onOpen;
+  final Future<void> Function(PostSummary) onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -715,20 +728,56 @@ class _MyPostsList extends StatelessWidget {
       );
     }
     if (posts.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 24),
-          child: Text(
-            '还没有发布文章',
-            style: TextStyle(color: Theme.of(context).colorScheme.outline),
-          ),
+      // 0.0.27：空态给出三条明确出路（发文章 / 去网站后台 / 刷新），
+      // 不再只留一句「还没有发布文章」让用户猜是坏了还是真没有。
+      final colorScheme = Theme.of(context).colorScheme;
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        child: Column(
+          children: [
+            Icon(Icons.edit_note_outlined, size: 44, color: colorScheme.outline),
+            const SizedBox(height: 10),
+            Text(
+              '这里还没有文章',
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '点底部「写文章」发表第一篇；已发布的内容会出现在这里',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: colorScheme.outline),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh_outlined, size: 16),
+                  label: const Text('刷新'),
+                ),
+                const SizedBox(width: 10),
+                TextButton(
+                  onPressed: () => launchUrl(
+                    Uri.parse('${AppConfig.blogUrl}/wp-admin/edit.php'),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                  child: const Text('去网站后台查看'),
+                ),
+              ],
+            ),
+          ],
         ),
       );
     }
     return Column(
       children: [
         for (var i = 0; i < posts.length; i++) ...[
-          _MyPostItem(post: posts[i], onTap: () => onOpen(i)),
+          _MyPostItem(
+            post: posts[i],
+            onTap: () => onOpen(i),
+            onEdit: () => onEdit(posts[i]),
+          ),
           const SizedBox(height: 12),
         ],
       ],
@@ -736,24 +785,33 @@ class _MyPostsList extends StatelessWidget {
   }
 }
 
-/// 「我的文章」的单条：在卡片右上角叠一个状态角标（草稿 / 待审核）。
+/// 「我的文章」的单条：在卡片右上角叠一个状态角标（草稿 / 待审核），
+/// 并提供「编辑」入口（自己的文章都能改；投稿者改已发布的会回待审核）。
 class _MyPostItem extends StatelessWidget {
-  const _MyPostItem({required this.post, required this.onTap});
+  const _MyPostItem({
+    required this.post,
+    required this.onTap,
+    required this.onEdit,
+  });
 
   final PostSummary post;
   final VoidCallback onTap;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
     final label = post.statusLabel;
-    if (label == null) return PostCard(post: post, onTap: onTap);
+    final card = PostCard(post: post, onTap: onTap);
+    if (label == null) {
+      return _EditBadgeOverlay(post: post, card: card, onEdit: onEdit);
+    }
     final colorScheme = Theme.of(context).colorScheme;
     return Stack(
       children: [
-        PostCard(post: post, onTap: onTap),
+        _EditBadgeOverlay(post: post, card: card, onEdit: onEdit),
         PositionedDirectional(
           top: 8,
-          end: 8,
+          end: 44,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
@@ -766,6 +824,52 @@ class _MyPostItem extends StatelessWidget {
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
                 color: colorScheme.onTertiaryContainer,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 卡片右上角的「编辑」小按钮（叠在 [PostCard] 上，不改动卡片本身）。
+class _EditBadgeOverlay extends StatelessWidget {
+  const _EditBadgeOverlay({
+    required this.post,
+    required this.card,
+    required this.onEdit,
+  });
+
+  final PostSummary post;
+  final Widget card;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Stack(
+      children: [
+        card,
+        PositionedDirectional(
+          top: 8,
+          end: 8,
+          child: Material(
+            color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.95),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onEdit,
+              child: Tooltip(
+                message: '编辑这篇文章',
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(
+                    Icons.edit_outlined,
+                    size: 16,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ),
             ),
           ),

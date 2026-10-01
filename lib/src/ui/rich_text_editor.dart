@@ -282,11 +282,16 @@ class RichTextEditor extends StatefulWidget {
     required this.controller,
     required this.dark,
     this.placeholder = '在这里写正文…',
+    this.onReady,
   });
 
   final RichTextEditorController controller;
   final bool dark;
   final String placeholder;
+
+  /// WebView 加载完成（编辑区可用）后回调一次。
+  /// 编辑已有文章时用它来回填正文（setHtml 必须等编辑器就绪）。
+  final VoidCallback? onReady;
 
   /// 编辑器的空文档脚手架（`setHtml('')` 时恢复到这个状态）。
   static const String emptyDoc = '<p><br></p>';
@@ -952,6 +957,7 @@ class _RichTextEditorState extends State<RichTextEditor> {
         NavigationDelegate(
           onPageFinished: (url) {
             widget.controller._onReady();
+            widget.onReady?.call();
           },
           onNavigationRequest: (req) => NavigationDecision.prevent,
         ),

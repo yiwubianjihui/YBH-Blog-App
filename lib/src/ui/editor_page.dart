@@ -26,8 +26,17 @@ import 'rich_text_editor.dart';
 ///   - 状态选项从「直接发布」换成「提交审核」；
 ///   - 顶部提示当前角色与审核说明；
 ///   - 提交后明确告诉用户「已提交，待审核」。
+///
+/// **编辑已有文章（0.0.27）**：传入 [post] 即进入编辑模式 —— 标题 / 正文 /
+/// 分类回填（正文优先 `content.raw`），保存走 [WpAuth.updatePost]。
+/// 权限与站点 `/write/` 同一套：自己的文章都能改；**已发布 + 无发布权**
+/// （投稿者改自己已发表的作品）保存后自动退回「待审核」二次审核，
+/// 与网页端行为一致。
 class EditorPage extends StatefulWidget {
-  const EditorPage({super.key});
+  const EditorPage({super.key, this.post});
+
+  /// 不为 null：编辑这篇已有文章（「我的文章」入口）。
+  final PostSummary? post;
 
   @override
   State<EditorPage> createState() => _EditorPageState();
@@ -36,6 +45,10 @@ class EditorPage extends StatefulWidget {
 class _EditorPageState extends State<EditorPage> {
   final TextEditingController _titleController = TextEditingController();
   final RichTextEditorController _editor = RichTextEditorController();
+
+  /// 编辑模式的目标文章；为 null 表示新建投稿。
+  PostSummary? get _editing => widget.post;
+  bool get _isEditing => _editing != null;
 
   List<BlogCategory> _categories = const [];
   int? _categoryId;
@@ -51,6 +64,9 @@ class _EditorPageState extends State<EditorPage> {
   /// 有未保存内容（用于返回时提醒）。
   bool _dirty = false;
   bool _submitted = false;
+
+  /// 编辑模式：等待正文回填（WebView 就绪后 setHtml）。
+  bool _hydrated = false;
 
   /// 查找 / 替换面板（T34 遗留项，补齐网页端 T33 的能力）。
   ///
@@ -72,13 +88,26 @@ class _EditorPageState extends State<EditorPage> {
   @override
   void initState() {
     super.initState();
-    _status = 'publish';
-    _titleController.addListener(_markDirty);
+    if (_isEditing) {
+      _status = _editing!.status == 'future' ? 'draft' : _editing!.status;
+      _titleController.text = _editing!.title;
+      _titleController.addListener(_markDirty);
+    } else {
+      _status = 'publish';
+      _titleController.addListener(_markDirty);
+    }
     _loadCategories();
     _loadCapabilities();
     // 站点样式与打包字体先备好，编辑区一打开就是网页同款观感。
     WebStyle.instance.prepare();
     EmbeddedFonts.instance.prepare();
+  }
+
+  /// 编辑模式：把已有文章回填进编辑器（WebView 就绪后调用一次）。
+  Future<void> _hydrateEditingContent() async {
+    if (_hydrated || !_isEditing) return;
+    _hydrated = true;
+    await _editor.setHtml(_editing!.editableContent);
   }
 
   @override
@@ -181,7 +210,20 @@ class _EditorPageState extends State<EditorPage> {
     try {
       final categories = await BlogApi.fetchCategories();
       if (!mounted) return;
-      setState(() => _categories = categories);
+      setState(() {
+        _categories = categories;
+        // 编辑模式：回填这篇文章现有的分类（名称匹配；REST 列表响应不带
+        // 分类 ID，拿名称到当前分类表里对一遍）。
+        if (_isEditing && _categoryId == null) {
+          final names = _editing!.terms.toSet();
+          for (final c in categories) {
+            if (names.contains(c.name)) {
+              _categoryId = c.id;
+              break;
+            }
+          }
+        }
+      });
     } catch (_) {
       // 忽略：分类为可选项。
     }
@@ -222,13 +264,25 @@ class _EditorPageState extends State<EditorPage> {
       _error = null;
     });
 
-    final result = await wpAuth.publishPost(
-      title: title,
-      content: html,
-      contentIsHtml: true,
-      status: _status,
-      categories: _categoryId == null ? null : [_categoryId!],
-    );
+    final PublishResult result;
+    if (_isEditing) {
+      result = await wpAuth.updatePost(
+        postId: _editing!.id,
+        title: title,
+        content: html,
+        contentIsHtml: true,
+        status: _status,
+        categories: _categoryId == null ? null : [_categoryId!],
+      );
+    } else {
+      result = await wpAuth.publishPost(
+        title: title,
+        content: html,
+        contentIsHtml: true,
+        status: _status,
+        categories: _categoryId == null ? null : [_categoryId!],
+      );
+    }
     if (!mounted) return;
     setState(() => _submitting = false);
 
@@ -242,19 +296,38 @@ class _EditorPageState extends State<EditorPage> {
     if (!mounted) return;
 
     final messenger = ScaffoldMessenger.of(context);
-    final notice = result.downgraded
-        ? '当前账号不能直接发布，已转为「待审核」提交'
-        : result.notice;
+    String notice;
+    if (result.downgraded) {
+      notice = '当前账号不能直接发布，已转为「待审核」提交';
+    } else if (_isEditing && _status == 'pending' && result.status == 'pending') {
+      // 投稿者改自己已发布的作品：退回待审核二次审核（与网页端一致）
+      notice = '已保存修改。该文章需再次审核，通过后重新公开显示';
+    } else if (result.status == 'pending') {
+      notice = '已提交审核，管理员通过后即可公开显示';
+    } else if (result.status == 'draft') {
+      notice = '已保存为草稿';
+    } else {
+      notice = _isEditing ? '已更新并发布' : '已发布';
+    }
     Navigator.of(context).pop(true);
     messenger.showSnackBar(SnackBar(content: Text(notice)));
   }
 
-  /// 当前状态对应的提交按钮文案。
-  String get _submitLabel => switch (_status) {
+  /// 当前状态对应的提交按钮文案（编辑模式语义略有不同）。
+  String get _submitLabel {
+    if (_isEditing) {
+      return switch (_status) {
         'draft' => '保存草稿',
-        'pending' => '提交审核',
-        _ => '发布',
+        'pending' => '保存并提交审核',
+        _ => '保存修改',
       };
+    }
+    return switch (_status) {
+      'draft' => '保存草稿',
+      'pending' => '提交审核',
+      _ => '发布',
+    };
+  }
 
   // ---------------------------------------------------------------- 插入类
 
@@ -418,7 +491,7 @@ class _EditorPageState extends State<EditorPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('写文章'),
+          title: Text(_isEditing ? '编辑文章' : '写文章'),
           actions: [
             if (_submitting)
               const Padding(
@@ -540,6 +613,7 @@ class _EditorPageState extends State<EditorPage> {
                     dark: dark,
                     placeholder: '在这里写正文…支持标题、加粗、列表、引用、代码块、'
                         '链接、图片与脚注。',
+                    onReady: _hydrateEditingContent,
                   ),
                   if (_uploading)
                     const Positioned.fill(
@@ -566,6 +640,7 @@ class _EditorPageState extends State<EditorPage> {
               status: _status,
               canPublish: _canPublish,
               editor: _editor,
+              editingPublished: _isEditing && _editing!.status == 'publish',
               onStatusChanged: (s) {
                 _markDirty();
                 setState(() => _status = s);
@@ -1040,18 +1115,27 @@ class _FindPanel extends StatelessWidget {
 }
 
 /// 底部：提交方式 + 字数。
+///
+/// [editingPublished] 为 true（编辑一篇已发布的文章）时，状态选择隐藏 ——
+/// 已发布的文章改完仍是已发布（有发布权）或回待审核（无发布权，由提交逻辑
+/// 自动降级并如实提示），不给用户「改成草稿」把文章直接下线的口子
+/// （与站点 `/write/` 端点 `ybh_front_save` 的服务端约束一致）。
 class _BottomBar extends StatelessWidget {
   const _BottomBar({
     required this.status,
     required this.canPublish,
     required this.editor,
     required this.onStatusChanged,
+    this.editingPublished = false,
   });
 
   final String status;
   final bool canPublish;
   final RichTextEditorController editor;
   final ValueChanged<String> onStatusChanged;
+
+  /// 是否正在编辑一篇已发布文章（隐藏状态切换）。
+  final bool editingPublished;
 
   @override
   Widget build(BuildContext context) {
@@ -1061,28 +1145,43 @@ class _BottomBar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: SegmentedButton<String>(
-              showSelectedIcon: false,
-              style: const ButtonStyle(
-                visualDensity: VisualDensity.compact,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              segments: [
-                ButtonSegment(
-                  value: 'publish',
-                  label: Text(canPublish ? '直接发布' : '提交审核',
-                      style: const TextStyle(fontSize: 12.5)),
-                ),
-                const ButtonSegment(
-                  value: 'draft',
-                  label: Text('存为草稿', style: TextStyle(fontSize: 12.5)),
-                ),
-              ],
-              selected: {status == 'pending' ? 'publish' : status},
-              onSelectionChanged: (s) => onStatusChanged(
-                s.first == 'publish' ? (canPublish ? 'publish' : 'pending') : s.first,
-              ),
-            ),
+            child: editingPublished
+                ? Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      canPublish
+                          ? '这篇文章已发布 · 保存后直接更新'
+                          : '这篇文章已发布 · 保存后需再次审核',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  )
+                : SegmentedButton<String>(
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    segments: [
+                      ButtonSegment(
+                        value: 'publish',
+                        label: Text(canPublish ? '直接发布' : '提交审核',
+                            style: const TextStyle(fontSize: 12.5)),
+                      ),
+                      const ButtonSegment(
+                        value: 'draft',
+                        label: Text('存为草稿', style: TextStyle(fontSize: 12.5)),
+                      ),
+                    ],
+                    selected: {status == 'pending' ? 'publish' : status},
+                    onSelectionChanged: (s) => onStatusChanged(
+                      s.first == 'publish'
+                          ? (canPublish ? 'publish' : 'pending')
+                          : s.first,
+                    ),
+                  ),
           ),
           const SizedBox(width: 10),
           ValueListenableBuilder<EditorToolbarState>(

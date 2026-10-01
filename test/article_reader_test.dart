@@ -105,8 +105,10 @@ void main() {
       expect(html, contains('id="ybh-fonts"'));
       expect(html, contains('data:font/woff2;base64,'));
       // 描述符逐条来自站点 CSS，抽样核对两条有代表性的。
-      expect(html, contains('"Klee One"'));
-      expect(html, contains('"YBH Emoji"'));
+      // （T57 之后站点把 Klee One 改为按需加载、Emoji 拆成 18 个懒加载分片，
+      // 两者都不再进内联清单 —— 这里改抽仍在清单里的基础面。）
+      expect(html, contains('"Sarasa UI SC"'));
+      expect(html, contains('"Font Awesome 6 Free"'));
     });
 
     test('站点分片前缀被保留（扩展汉字按需加载，不整包内联）', () {

@@ -79,7 +79,6 @@ SITE_PREFIX = '/wp-content/uploads/ybh-fonts/'
 #: 站点 CSS 里保留、App 不内联的目录（相对 SITE_PREFIX）。
 #: 生成清单时写进 `keepOnSitePrefixes`，由注入脚本转成 `keep` 前缀，
 #: 命中这些前缀的站点 @font-face **不删**，交给浏览器按 unicode-range 懒加载。
-LAZY_DIRS = ('slices',)
 
 #: 同样留在站点、但按**单条 URL** 保留的面孔。
 #:
@@ -93,6 +92,12 @@ LAZY_DIRS = ('slices',)
 #: 规则做「按需补充」**。不要为了抢优先级把替换样式挪到 `<head>` 末尾 ——
 #: 那会让无 unicode-range 的 `*.subset` 面压过站点分片，扩展区汉字反而全变豆腐。
 LAZY_PATHS = ('slice/SarasaUiSC-ExtB.woff2',)
+
+#: 留在站点按需加载的**目录**（不打包、也不删站点规则）。
+#: `emoji/` 是 T57 之后的形态：站点把表情拆成 18 个小分片按 unicode-range
+#: 懒加载 —— App 内联它们既无必要（正文里 emoji 很少）也拖累替换 CSS 体积；
+#: 删掉规则则评论里的表情全部变豆腐。保持站点规则、按需下载才是正解。
+LAZY_DIRS = ('slices', 'emoji')
 
 #: 站点 load 的 FontAwesome 不在 ybh-fonts 下（在插件目录里，注入脚本的
 #: `/ybh-fonts/` 前缀匹配不到），所以它不能从站点 CSS 推导，只能显式补。
@@ -166,6 +171,14 @@ def _sha256(p: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b''):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _write_text(p: Path, text: str) -> None:
+    """UTF-8 无 BOM、LF。`Path.write_text(newline=…)` 要 Python 3.10+，
+    本机是 3.8 —— 用二进制写兜底。"""
+    data = text.replace('\r\n', '\n').encode('utf-8')
+    with open(p, 'wb') as fh:
+        fh.write(data)
 
 
 SITE_BASE = 'https://www.yibianhui.cn' + SITE_PREFIX
@@ -400,8 +413,7 @@ def write_report(manifest: dict, stats: dict, css_path: Path,
               '`EmbeddedFonts.prepare()` 整体失败 ⇒ 字体本地化静默失效（215161b 就这样栽过）。',
               '`test/font_manifest_test.dart` 会替你把这条守住。',
               '']
-    out_path.write_text('\n'.join(lines), encoding='utf-8', newline='\n')
-
+    out_path.write_text('\n'.join(lines), encoding='utf-8')
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -439,8 +451,7 @@ def main() -> int:
         if diff and a.apply:
             # 资产换了，清单的 bytes/sha256 必须跟着重算。
             fresh, stats = build(faces)
-            MANIFEST.write_text(json.dumps(fresh, ensure_ascii=False, indent=1) + '\n',
-                                encoding='utf-8', newline='\n')
+            _write_text(MANIFEST, json.dumps(fresh, ensure_ascii=False, indent=1) + '\n')
             write_report(fresh, stats, css_path, Path(a.report))
             print('已用线上资产重建清单 %s（内联 %.2f MB）'
                   % (MANIFEST, fresh['totalBytes'] / 1048576))
@@ -464,13 +475,11 @@ def main() -> int:
         print('\n与现有清单一致 ✅')
 
     if a.write:
-        MANIFEST.write_text(json.dumps(fresh, ensure_ascii=False, indent=1) + '\n',
-                            encoding='utf-8', newline='\n')
+        _write_text(MANIFEST, json.dumps(fresh, ensure_ascii=False, indent=1) + '\n')
         print('\n已写入 %s' % MANIFEST)
         write_report(fresh, stats, css_path, Path(a.report))
         print('已写入清单报告 %s' % a.report)
         return 0
-
     if a.check and diffs:
         print('\n[!] 清单与站点 CSS 不一致 —— 请跑 --write 后提交')
         return 1

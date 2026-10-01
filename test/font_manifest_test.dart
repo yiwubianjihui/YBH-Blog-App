@@ -93,14 +93,18 @@ void main() {
       // 设计不变量：App 的替换样式只做基础字体（插在 <head> 靠前），
       // 站点保留的分片规则做按需补充（在后，同族同码位后声明者胜）。
       // 一旦有人把替换样式挪到 head 末尾，无 range 的 *.subset 会压过分片，
-      // 扩展区汉字全部变豆腐 —— 这里把「无 range 的面必须存在」记录下来，
-      // 提醒改动者那条不变量不是可选项。
+      // 扩展区汉字全部变豆腐 —— 这里把这条不变量记录下来。
+      //
+      // T57 之后站点把 Sarasa 基础面也切了子集（每条都带 unicode-range），
+      // 「无 range 的面」在站点 CSS 里已不存在 ⇒ 本条改为断言它的**反面**：
+      // 内联规则不允许出现无 unicode-range 的 Sarasa 面（那才是把分片压掉的写法）。
       final rules = (manifest['rules'] as List<dynamic>).cast<Map<String, dynamic>>();
       final unbounded = rules.where((r) =>
           r['family'] == 'Sarasa UI SC' &&
-          (r['unicodeRange'] == null || (r['unicodeRange'] as String).isEmpty));
-      expect(unbounded, isNotEmpty,
-          reason: 'Sarasa UI SC 的基础面应当无 unicode-range（覆盖全集）');
+          ((r['unicodeRange'] as String?)?.isEmpty ?? true));
+      expect(unbounded, isEmpty,
+          reason: '内联清单里不应有「无 unicode-range 的 Sarasa 面」——'
+              '它会与站点分片规则冲突（同族同码位后声明者胜）');
     });
   });
 }
