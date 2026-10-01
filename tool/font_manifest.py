@@ -99,6 +99,17 @@ LAZY_PATHS = ('slice/SarasaUiSC-ExtB.woff2',)
 #: 删掉规则则评论里的表情全部变豆腐。保持站点规则、按需下载才是正解。
 LAZY_DIRS = ('slices', 'emoji')
 
+#: 留在站点按需加载的**路径前缀**（相对 SITE_PREFIX，匹配 `path.startswith`）。
+#:
+#: `noto-serif-sc/s`：思源宋体的 101 个正文分片（共 5.75 MB）。标题衬线由
+#: `subset/title-*.woff2`（YBH Serif，共 288 KB，见 EXTRA_RULES）打包内联；
+#: 正文分片与遍黑体分片同理 —— 带精确 unicode-range，命中才下载，打包反而
+#: 让安装包 +6 MB 而正文里衬线只出现在引用块等少数场景。
+#:
+#: ⚠️ 前缀顺序在 LAZY_DIRS 之后判断；`noto-serif-sc/subset/title-*` **不**命中
+#: 该前缀（`subset/` 不以 `s` 开头），会走 EXTRA_RULES 内联。
+LAZY_PREFIXES = ('noto-serif-sc/s',)
+
 #: 站点 load 的 FontAwesome 不在 ybh-fonts 下（在插件目录里，注入脚本的
 #: `/ybh-fonts/` 前缀匹配不到），所以它不能从站点 CSS 推导，只能显式补。
 #: 这三份资产 + 三个族名与站点插件里声明的一致，用于保证正文图标离线可用。
@@ -130,6 +141,55 @@ EXTRA_RULES = [
     dict(path='fontawesome/webfonts/fa-regular-400.woff2',
          family='FontAwesome', weight='400', style='normal',
          display='block', unicodeRange=None),
+]
+
+#: 语义字体面（App 0.0.28）。**打包内联**，对应站长钦定的四组分工：
+#:
+#: （一）Sans   汉字=遍黑体（Sarasa UI SC，站点 CSS 已内联打包）· 西文=更纱黑体（同一张面）
+#: （二）WK     中文=霞鹜文楷（已打包）· **西文=更纱真斜体**（本表前两条）· 日文=Klee One 假名
+#: （三）Serif  思源宋体 —— 标题走 `YBH Serif`（title-300/700 站点标题子集，本表后两条）；
+#:              正文分片 101 片共 5.75 MB 不打包，留在站点按 unicode-range 懒加载
+#: （四）Emoji  Noto Emoji 18 分片 —— 留在站点懒加载（LAZY_DIRS）
+#:
+#: 描述符（weight/style/unicode-range）与站点 CSS 逐字一致 —— 这两条 italic 面在站点里
+#: **没有 unicode-range**（全量面），打包时也保持无 range（覆盖全集，才能接住西文斜体）。
+#: Klee 假名面按站点注册了 SC/J × 400/700 四条（同一文件、同一假名 range）。
+SEMANTIC_FACES = [
+    # WK 西文：更纱真斜体（400 / 700）
+    dict(path='slice/SarasaUiSC-Italic.subset.woff2',
+         family='Sarasa UI SC', weight='400', style='italic',
+         display='fallback', unicodeRange=None),
+    dict(path='slice/SarasaUiSC-BoldItalic.subset.woff2',
+         family='Sarasa UI SC', weight='700', style='italic',
+         display='fallback', unicodeRange=None),
+    # WK 日文：Klee One 假名（38.8 KB，242 码位）— 站点注册为 SC/J × 400/700 四条
+    dict(path='klee-one/KleeOne-Regular.kana.woff2',
+         family='Sarasa UI SC', weight='400', style='italic',
+         display='fallback',
+         unicodeRange='U+3005,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF66-FF9D'),
+    dict(path='klee-one/KleeOne-Regular.kana.woff2',
+         family='Sarasa UI SC', weight='700', style='italic',
+         display='fallback',
+         unicodeRange='U+3005,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF66-FF9D'),
+    dict(path='klee-one/KleeOne-Regular.kana.woff2',
+         family='Sarasa UI J', weight='400', style='italic',
+         display='fallback',
+         unicodeRange='U+3005,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF66-FF9D'),
+    dict(path='klee-one/KleeOne-Regular.kana.woff2',
+         family='Sarasa UI J', weight='700', style='italic',
+         display='fallback',
+         unicodeRange='U+3005,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF66-FF9D'),
+    # Klee One 站点签名子集（站点自定义 CSS 的 .header-info 等用它；31 KB）
+    dict(path='klee-one/KleeOne-Regular.sig.woff2',
+         family='Klee One', weight='400', style='normal',
+         display='fallback', unicodeRange=None),
+    # Serif：站点标题子集（YBH Serif，288 KB，覆盖站内全部标题用字）
+    dict(path='noto-serif-sc/subset/title-300.woff2',
+         family='YBH Serif', weight='300', style='normal',
+         display='fallback', unicodeRange=None),
+    dict(path='noto-serif-sc/subset/title-700.woff2',
+         family='YBH Serif', weight='700 900', style='normal',
+         display='fallback', unicodeRange=None),
 ]
 
 _FACE_RE = re.compile(r'@font-face\s*\{(.*?)\}', re.S)
@@ -242,16 +302,22 @@ def build(faces: list[dict]) -> tuple[dict, dict]:
     inline_files: dict[str, dict] = {}
     lazy: list[dict] = []
     dropped: list[dict] = []
+    seen_rules: set[tuple] = set()   # (path, family, weight, style) — 站点 CSS 里有重复声明
 
     for f in faces:
         top = f['path'].split('/')[0] if '/' in f['path'] else ''
         fp = APP_FONTS / f['path']
-        if top in LAZY_DIRS or f['path'] in LAZY_PATHS:
+        if (top in LAZY_DIRS or f['path'] in LAZY_PATHS
+                or any(f['path'].startswith(p) for p in LAZY_PREFIXES)):
             lazy.append(f)
             continue
         if not fp.is_file():
             dropped.append(f)
             continue
+        key = (f['path'], f['family'], f['weight'], f['style'])
+        if key in seen_rules:
+            continue
+        seen_rules.add(key)
         if f['path'] not in inline_files:
             inline_files[f['path']] = dict(
                 path=f['path'],
@@ -265,11 +331,16 @@ def build(faces: list[dict]) -> tuple[dict, dict]:
             unicodeRange=f['unicodeRange'],
         ))
 
-    # 站点推导不到的 FontAwesome：显式补，且只补本地真有资产的。
-    for r in EXTRA_RULES:
+    # 站点推导不到的 FontAwesome / 语义字体面：显式补，且只补本地真有资产的。
+    # 与站点推导的规则按同一把 key 去重（站点 CSS 已声明过的不重复补）。
+    for r in list(EXTRA_RULES) + list(SEMANTIC_FACES):
         fp = APP_FONTS / r['path']
         if not fp.is_file():
             continue
+        key = (r['path'], r['family'], r['weight'], r['style'])
+        if key in seen_rules:
+            continue
+        seen_rules.add(key)
         if r['path'] not in inline_files:
             inline_files[r['path']] = dict(
                 path=r['path'], asset='assets/fonts/' + r['path'],
@@ -287,7 +358,8 @@ def build(faces: list[dict]) -> tuple[dict, dict]:
               '`keepOnSitePrefixes` 下的站点规则**不删**，按 unicode-range 懒加载。'
               '替换样式只做基础字体、站点保留规则做按需补充 —— 不要靠挪动样式位置抢优先级。'),
         keepOnSitePrefixes=([SITE_PREFIX + d + '/' for d in LAZY_DIRS]
-                            + [SITE_PREFIX + p for p in LAZY_PATHS]),
+                            + [SITE_PREFIX + p for p in LAZY_PATHS]
+                            + [SITE_PREFIX + p for p in LAZY_PREFIXES]),
         count=len(inline_files),
         ruleCount=len(inline_rules),
         totalBytes=total,

@@ -171,12 +171,19 @@ class WebStyle {
 
   /// 兜底样式：站点 CSS 没抓到（离线 / 站点异常）时，至少保证
   /// 字体族、基准字号、行高与网页端一致，而不是退回系统默认。
+  ///
+  /// 字体栈与站点 T57 的 Sans 栈逐字一致（`inc/ybh` 的语义分派）：
+  /// 汉字走遍黑体（Sarasa UI SC），emoji 兜底在系统字体之前。
   static const String fallbackCss = '''
 /* 兜底：与网页端同族的字体栈与基准字号（站点 CSS 未取到时使用） */
 body {
-  font-family: 'Sarasa UI SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: 'Sarasa UI SC', 'PingFang SC', 'Microsoft YaHei', 'YBH Emoji', sans-serif;
   font-size: 20px;
   line-height: 1.8;
+}
+/* 标题衬线（与站点 Serif 栈一致；YBH Serif 由打包字体供给） */
+h1, h2, .entry-title, .cat-title {
+  font-family: 'YBH Serif', 'Noto Serif SC', serif;
 }
 ''';
 

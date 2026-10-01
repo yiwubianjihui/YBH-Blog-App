@@ -92,18 +92,19 @@ void main() {
     test('没有内联「无 unicode-range 的 Sarasa 面」与站点分片的冲突设计', () {
       // 设计不变量：App 的替换样式只做基础字体（插在 <head> 靠前），
       // 站点保留的分片规则做按需补充（在后，同族同码位后声明者胜）。
-      // 一旦有人把替换样式挪到 head 末尾，无 range 的 *.subset 会压过分片，
-      // 扩展区汉字全部变豆腐 —— 这里把这条不变量记录下来。
       //
-      // T57 之后站点把 Sarasa 基础面也切了子集（每条都带 unicode-range），
-      // 「无 range 的面」在站点 CSS 里已不存在 ⇒ 本条改为断言它的**反面**：
-      // 内联规则不允许出现无 unicode-range 的 Sarasa 面（那才是把分片压掉的写法）。
+      // T57 之后站点把 Sarasa 基础面也切了子集（每条都带 unicode-range）；
+      // 唯一的例外是 **italic 面**（0.0.28 打包的更纱真斜体，WK 西文分支）——
+      // 它们与正常体分片不冲突（font-style 不同，浏览器只在斜体请求时取用），
+      // 所以本条只对 **normal** 体断言：内联规则不允许出现无 unicode-range 的
+      // 正常体 Sarasa 面（那才是把分片压掉、扩展区汉字变豆腐的写法）。
       final rules = (manifest['rules'] as List<dynamic>).cast<Map<String, dynamic>>();
       final unbounded = rules.where((r) =>
           r['family'] == 'Sarasa UI SC' &&
+          r['style'] != 'italic' &&
           ((r['unicodeRange'] as String?)?.isEmpty ?? true));
       expect(unbounded, isEmpty,
-          reason: '内联清单里不应有「无 unicode-range 的 Sarasa 面」——'
+          reason: '内联清单里不应有「无 unicode-range 的正常体 Sarasa 面」——'
               '它会与站点分片规则冲突（同族同码位后声明者胜）');
     });
   });
