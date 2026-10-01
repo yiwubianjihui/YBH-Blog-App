@@ -229,6 +229,10 @@ pre { position: relative; }
   font-size: 1.5em;
   line-height: 1.4;
   font-weight: 700;
+  /* 站点把标题交给衬线（T55/T57 的 Serif 栈）。阅读器的标题是自绘壳
+     （.ybh-title 不是站点的 .entry-title），这里显式跟网站同栈 ——
+     YBH Serif（思源宋体标题子集）已由打包字体供给。 */
+  font-family: 'YBH Serif', 'Noto Serif SC', 'TH-Tshyn', serif;
 }
 .ybh-article-meta {
   display: flex;

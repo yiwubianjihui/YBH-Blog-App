@@ -138,8 +138,33 @@ $content
   });
 
   try { if (window.YbhDiag) {
+    var fc = '';
+    try {
+      if (document.fonts) {
+        // faces 是「已注册」的清单；再实际触发一次加载，check 才能反映真值。
+        var fams = ['Sarasa UI SC', 'YBH Serif', 'LXGW WenKai', 'Klee One'];
+        var loaded = [];
+        for (var i = 0; i < fams.length; i++) {
+          (function (fam) {
+            document.fonts.load('16px "' + fam + '"', '测试Test').then(function () {}, function () {});
+          })(fams[i]);
+        }
+        setTimeout(function () {
+          var out = [];
+          for (var j = 0; j < fams.length; j++) {
+            out.push(fams[j].split(' ')[0] + '=' + (document.fonts.check('16px "' + fams[j] + '"') ? 1 : 0));
+          }
+          window.YbhDiag.postMessage('字体 | ' + out.join(' '));
+        }, 300);
+        fc = 'faces=' + document.fonts.size;
+      }
+    } catch (e) {}
+    var bodyFF = '';
+    try { bodyFF = getComputedStyle(document.querySelector('.entry-content')).fontFamily; } catch (e) {}
     window.YbhDiag.postMessage('阅读器 | 样式 ' + document.styleSheets.length +
-      ' 表 / 正文 ' + document.querySelector('.entry-content').innerHTML.length + ' 字符');
+      ' 表 / 正文 ' + document.querySelector('.entry-content').innerHTML.length + ' 字符' +
+      (fc ? ' / ' + fc : '') +
+      ' / 正文栈 ' + bodyFF.substring(0, 90));
   } } catch (e) {}
 })();
 </script>
