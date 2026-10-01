@@ -46,7 +46,6 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   String? _error;
 
   String _email = '';
-  String _siteProfileUrl = '${AppConfig.blogUrl}/profile/';
 
   @override
   void initState() {
@@ -91,8 +90,6 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         _descController.text = (map['description'] as String?) ?? '';
         _urlController.text = (map['url'] as String?) ?? '';
         _email = (map['email'] as String?) ?? '';
-        final slug = (map['slug'] as String?) ?? '';
-        if (slug.isNotEmpty) _siteProfileUrl = '${AppConfig.blogUrl}/author/$slug/';
         _loading = false;
       });
     } catch (e) {
@@ -224,12 +221,15 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     }
   }
 
-  void _openSiteProfile() {
-    // 站点资料页（头像 / 社交账号 / 偏好 / 邮箱更换）：整站 WebView 自动带登录态。
+  /// 打开站点资料页的指定分区（头像/社交/偏好/安全）。
+  void _openSiteTab(String tab) {
+    final base = '${AppConfig.blogUrl}/profile/';
+    final url = tab == 'profile' || tab.isEmpty ? base : '$base?ybh_tab=$tab';
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => BlogWebViewPage(
-          initialUrl: _siteProfileUrl,
+          initialUrl: url,
+          loginReturnUrl: url,
           uiState: WebViewUiState(),
         ),
       ),
@@ -360,7 +360,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                             ),
                           ),
                           TextButton(
-                            onPressed: _openSiteProfile,
+                            onPressed: () => _openSiteTab('security'),
                             child: const Text('更换邮箱'),
                           ),
                         ],
@@ -430,13 +430,54 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                 const SizedBox(height: 16),
                 _Card(
                   children: [
+                    Text(
+                      '站点设置（应用内网页，登录状态自动同步）',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '这些设置保存在网站服务器，网页端与 App 同步可见',
+                      style: TextStyle(fontSize: 12, color: colorScheme.outline),
+                    ),
+                    const SizedBox(height: 8),
                     ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.account_circle_outlined),
-                      title: Text(L.t(context, '更多设置（头像 / 社交账号 / 偏好）')),
-                      subtitle: Text(L.t(context, '在网站资料页中完成，登录状态自动同步')),
-                      trailing: const Icon(Icons.chevron_right_outlined),
-                      onTap: _openSiteProfile,
+                      title: const Text('头像'),
+                      subtitle: const Text('上传新头像（≤2 MB，自动裁方）'),
+                      trailing: const Icon(Icons.chevron_right_outlined, size: 20),
+                      onTap: () => _openSiteTab('avatar'),
+                    ),
+                    const Divider(height: 1, indent: 56),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.share_outlined),
+                      title: const Text('社交账号'),
+                      subtitle: const Text('GitHub / B站 / 知乎 / 微博 / Telegram 等'),
+                      trailing: const Icon(Icons.chevron_right_outlined, size: 20),
+                      onTap: () => _openSiteTab('profile'),
+                    ),
+                    const Divider(height: 1, indent: 56),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.tune_outlined),
+                      title: const Text('偏好'),
+                      subtitle: const Text('后台配色、界面语言、编辑器选项'),
+                      trailing: const Icon(Icons.chevron_right_outlined, size: 20),
+                      onTap: () => _openSiteTab('prefs'),
+                    ),
+                    const Divider(height: 1, indent: 56),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.mail_outline),
+                      title: const Text('更换邮箱'),
+                      subtitle: const Text('两步确认：新邮箱收信后点击链接生效'),
+                      trailing: const Icon(Icons.chevron_right_outlined, size: 20),
+                      onTap: () => _openSiteTab('security'),
                     ),
                   ],
                 ),

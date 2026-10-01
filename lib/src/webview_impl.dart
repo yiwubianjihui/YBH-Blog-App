@@ -28,13 +28,26 @@ import 'shell/webview_ui_state.dart';
 ///   应用内 HttpClient 拿到的会话无效，故必须由 WebView 自身登录）；
 ///   退出登录时清空 WebView Cookie。
 class BlogWebViewPage extends StatefulWidget {
-  const BlogWebViewPage({super.key, required this.uiState, this.initialUrl});
+  const BlogWebViewPage({
+    super.key,
+    required this.uiState,
+    this.initialUrl,
+    this.loginReturnUrl,
+  });
 
   final WebViewUiState uiState;
 
   /// 起始地址；为空表示站点首页。首页「从这里开始」的直链会用这个参数
   /// 直接内嵌打开，而不是丢给系统浏览器。
   final String? initialUrl;
+
+  /// 自动登录成功后要回到的页面。
+  ///
+  /// 背景：「个人资料 → 更多设置」直接打开 `/profile/`，若 WebView 还没有登录
+  /// 会话，自动登录会把用户带回 `redirect_to` —— 老逻辑取"当前页"，而
+  /// initState 时 currentUrl 还没来得及更新 ⇒ 登录后被送回首页，
+  /// 表现为「点更多设置进去却改不了设置」（用户报障）。显式传入目标页即可。
+  final String? loginReturnUrl;
 
   @override
   State<BlogWebViewPage> createState() => BlogWebViewState();
@@ -360,7 +373,10 @@ class BlogWebViewState extends State<BlogWebViewPage> {
     // 保证「整站」与 App 登录态一致（WebView 自身会话在下次启动仍有效，
     // 此处仅兜底，不会重复登录）。
     if (wpAuth.isLoggedIn && wpAuth.webLoginCredentials != null) {
-      _startAutoLogin();
+      // 优先回到外部指定的目标页（如 /profile/）；否则回到正在浏览的页面。
+      _startAutoLogin(
+        returnTo: widget.loginReturnUrl ?? widget.initialUrl,
+      );
     }
   }
 
@@ -372,7 +388,12 @@ class BlogWebViewState extends State<BlogWebViewPage> {
 
   void _onWebLoginRequested() {
     if (wpAuth.isLoggedIn && wpAuth.webLoginCredentials != null) {
-      _startAutoLogin();
+      _startAutoLogin(
+        returnTo: widget.loginReturnUrl ??
+            (widget.initialUrl != null && widget.initialUrl!.isNotEmpty
+                ? widget.initialUrl
+                : null),
+      );
     } else {
       _clearSessionAndReload();
     }

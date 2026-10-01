@@ -207,10 +207,15 @@ class _ProfileTabState extends State<ProfileTab> {
     await _loadCategoryPrefs();
   }
 
-  /// 语言设置项的副标题：当前生效语言的名字。
-  String get _languageSubtitle {
+  /// 语言设置项的副标题：跟随系统时显示系统解析出的语言，手动时显示所选语言。
+  String _languageSubtitle(BuildContext context) {
     final lang = AppLanguage.fromCode(L.code);
-    return lang == AppLanguage.system ? '跟随系统 · ${lang.label}' : lang.label;
+    if (lang != AppLanguage.system) return lang.label;
+    final resolved = L.resolve(context);
+    final resolvedName = AppLanguage.values
+        .firstWhere((l) => l.code == resolved, orElse: () => AppLanguage.zhHans)
+        .label;
+    return '跟随系统（当前：$resolvedName）';
   }
 
   /// 选择 App 界面语言。选择后由外壳重建 MaterialApp（[onLanguageChanged]）。
@@ -439,7 +444,7 @@ class _ProfileTabState extends State<ProfileTab> {
               ListTile(
                 leading: const Icon(Icons.language_outlined),
                 title: Text(L.t(context, '语言')),
-                subtitle: Text(_languageSubtitle),
+                subtitle: Text(_languageSubtitle(context)),
                 trailing: const Icon(Icons.chevron_right_outlined, size: 20),
                 onTap: _pickLanguage,
               ),
