@@ -30,6 +30,7 @@ class HomeShellPage extends StatefulWidget {
     required this.darkMode,
     required this.onToggleDarkMode,
     this.onOpenNotificationSettings,
+    this.onLanguageChanged,
   });
 
   final bool darkMode;
@@ -37,6 +38,9 @@ class HomeShellPage extends StatefulWidget {
 
   /// 打开「通知设置」页。
   final Future<void> Function()? onOpenNotificationSettings;
+
+  /// App 界面语言变更（由外层重建 MaterialApp 生效）。
+  final VoidCallback? onLanguageChanged;
 
   @override
   State<HomeShellPage> createState() => _HomeShellPageState();
@@ -283,6 +287,7 @@ class _HomeShellPageState extends State<HomeShellPage> {
             ProfileTab(
               onOpenCategoryOrder: _openCategoryOrder,
               onOpenNotificationSettings: widget.onOpenNotificationSettings,
+              onLanguageChanged: widget.onLanguageChanged,
             ),
           ],
         ),

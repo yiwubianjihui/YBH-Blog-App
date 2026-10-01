@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'src/app_config.dart';
 import 'src/blog_host.dart';
+import 'src/data/app_i18n.dart';
 import 'src/data/embedded_fonts.dart';
 import 'src/data/notification_background.dart';
 import 'src/data/notification_checker.dart';
@@ -18,7 +20,8 @@ void main() {
   // 网页字体本地化：把打包字体读成 base64 并拼替代 CSS（T30）。
   // 提前启动，等用户切到「整站」页时早已就绪；失败静默，退回站点原字体。
   EmbeddedFonts.instance.prepare();
-  runApp(const YbhApp());
+  // App 界面语言（0.0.29）：先读存储再 runApp，首帧就是正确语言。
+  L.load().then((_) => runApp(const YbhApp()));
 }
 
 /// 通知相关的一次性初始化。
@@ -96,6 +99,12 @@ class _YbhAppState extends State<YbhApp> {
     }
   }
 
+  /// App 界面语言变更（「我的 → 语言」）：重建 MaterialApp 让译文生效。
+  Future<void> _onLanguageChanged() async {
+    if (!mounted) return;
+    setState(() {});   // build 里重取 L.localeOverride
+  }
+
   @override
   Widget build(BuildContext context) {
     const primary = Color(AppConfig.themeColorValue);
@@ -105,12 +114,22 @@ class _YbhAppState extends State<YbhApp> {
       // 见 _navigatorKey 的注释：跨「MaterialApp 之上」的页面跳转必须用它。
       navigatorKey: _navigatorKey,
       themeMode: _darkMode ? ThemeMode.dark : ThemeMode.system,
+      // App 界面多语言（0.0.29）：缺译回退中文；supportedLocales 只声明
+      // 我们真的有译表的语言，未覆盖的系统语言自然落回 zh-Hans。
+      locale: L.localeOverride,
+      supportedLocales: L.supportedLocales,
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: _buildTheme(primary, dark: false),
       darkTheme: _buildTheme(primary, dark: true),
       home: BlogHost(
         darkMode: _darkMode,
         onToggleDarkMode: _toggleDarkMode,
         onOpenNotificationSettings: _openNotificationSettings,
+        onLanguageChanged: _onLanguageChanged,
       ),
     );
   }

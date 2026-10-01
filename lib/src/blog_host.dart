@@ -15,6 +15,7 @@ class BlogHost extends StatelessWidget {
     required this.darkMode,
     required this.onToggleDarkMode,
     this.onOpenNotificationSettings,
+    this.onLanguageChanged,
   });
 
   final bool darkMode;
@@ -22,6 +23,9 @@ class BlogHost extends StatelessWidget {
 
   /// 打开「通知设置」页（由外层提供，避免这里直接依赖具体页面）。
   final Future<void> Function()? onOpenNotificationSettings;
+
+  /// App 界面语言变更（由外层重建 MaterialApp 生效）。
+  final VoidCallback? onLanguageChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +40,7 @@ class BlogHost extends StatelessWidget {
           darkMode: darkMode,
           onToggleDarkMode: onToggleDarkMode,
           onOpenNotificationSettings: onOpenNotificationSettings,
+          onLanguageChanged: onLanguageChanged,
         );
       default:
         return const DesktopFallbackPage();

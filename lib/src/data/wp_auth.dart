@@ -424,6 +424,28 @@ class WpAuth {
     await _persist();
   }
 
+  /// 校验「当前密码」是否正确（改密码前用；与站点「必须验当前密码」口径一致）。
+  ///
+  /// 做法：拿旧凭据走一次 JWT 登录 —— 成功即正确。**不落任何状态**：
+  /// 既不更新 [_token]（那会把当前会话换成新令牌，倒也无害但没必要），
+  /// 也不写 [webLoginCredentials]。
+  Future<bool> verifyPassword(String password) async {
+    final user = _user?.login ?? '';
+    if (user.isEmpty || password.isEmpty) return false;
+    try {
+      final resp = await http
+          .post(
+            Uri.parse(AppConfig.jwtTokenUrl),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'username': user, 'password': password}),
+          )
+          .timeout(_timeout);
+      return resp.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 拉取「我的文章」列表（当前登录用户，含草稿 / 待审核）。
   ///
   /// 会带上「草稿 / 待审核」一起拉，方便投稿者看到自己刚提交的内容；

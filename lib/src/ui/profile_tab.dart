@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app_config.dart';
+import '../data/app_i18n.dart';
 import '../data/blog_api.dart';
 import '../data/category_order.dart';
 import '../data/update_checker.dart';
@@ -13,6 +14,7 @@ import 'editor_page.dart';
 import 'notification_center_page.dart';
 import 'post_card.dart';
 import 'post_detail_page.dart';
+import 'profile_edit_page.dart';
 
 /// 「我的」页：未登录显示登录表单；登录后显示用户信息、我的文章与写文章入口。
 class ProfileTab extends StatefulWidget {
@@ -20,6 +22,7 @@ class ProfileTab extends StatefulWidget {
     super.key,
     this.onOpenCategoryOrder,
     this.onOpenNotificationSettings,
+    this.onLanguageChanged,
   });
 
   /// 打开「分类排序」页（由外壳实现，返回后刷新文章页分类顺序）。
@@ -27,6 +30,9 @@ class ProfileTab extends StatefulWidget {
 
   /// 打开「通知设置」页。
   final Future<void> Function()? onOpenNotificationSettings;
+
+  /// App 界面语言变更后由外壳重建 MaterialApp。
+  final VoidCallback? onLanguageChanged;
 
   @override
   State<ProfileTab> createState() => _ProfileTabState();
@@ -201,6 +207,43 @@ class _ProfileTabState extends State<ProfileTab> {
     await _loadCategoryPrefs();
   }
 
+  /// 语言设置项的副标题：当前生效语言的名字。
+  String get _languageSubtitle {
+    final lang = AppLanguage.fromCode(L.code);
+    return lang == AppLanguage.system ? '跟随系统 · ${lang.label}' : lang.label;
+  }
+
+  /// 选择 App 界面语言。选择后由外壳重建 MaterialApp（[onLanguageChanged]）。
+  Future<void> _pickLanguage() async {
+    final current = L.code;
+    final picked = await showDialog<AppLanguage>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(L.t(context, '语言')),
+        children: [
+          for (final lang in AppLanguage.values)
+            ListTile(
+              leading: Icon(
+                lang.code == current
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+                color: lang.code == current
+                    ? Theme.of(ctx).colorScheme.primary
+                    : null,
+              ),
+              title: Text(lang.label),
+              onTap: () => Navigator.of(ctx).pop(lang),
+            ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    await L.setLanguage(picked.code);
+    if (!mounted) return;
+    setState(() {});          // 刷新本页副标题
+    widget.onLanguageChanged?.call();   // 外壳重建 MaterialApp 生效
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -272,11 +315,30 @@ class _ProfileTabState extends State<ProfileTab> {
         ),
         const SizedBox(height: 24),
         if (wpAuth.isLoggedIn) ...[
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.person_outline),
+                  title: Text(L.t(context, '个人资料')),
+                  subtitle: Text(L.t(context, '编辑昵称、简介与站点资料页')),
+                  trailing: const Icon(Icons.chevron_right_outlined),
+                  onTap: () => Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const ProfileEditPage(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
           Row(
             children: [
               Expanded(
                 child: Text(
-                  '我的文章',
+                  L.t(context, '我的文章'),
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
@@ -285,7 +347,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 ),
               ),
               IconButton(
-                tooltip: '刷新',
+                tooltip: L.t(context, '刷新'),
                 icon: const Icon(Icons.refresh_outlined, size: 20),
                 onPressed: _loadingPosts ? null : _loadMyPosts,
               ),
@@ -366,12 +428,20 @@ class _ProfileTabState extends State<ProfileTab> {
               const Divider(height: 1, indent: 56),
               ListTile(
                 leading: const Icon(Icons.notifications_outlined),
-                title: const Text('通知设置'),
-                subtitle: const Text('新文章发布、投稿审核通过提醒'),
+                title: Text(L.t(context, '通知设置')),
+                subtitle: Text(L.t(context, '新文章发布、投稿审核通过提醒')),
                 trailing: const Icon(Icons.chevron_right_outlined, size: 20),
                 onTap: widget.onOpenNotificationSettings == null
                     ? null
                     : () => widget.onOpenNotificationSettings!(),
+              ),
+              const Divider(height: 1, indent: 56),
+              ListTile(
+                leading: const Icon(Icons.language_outlined),
+                title: Text(L.t(context, '语言')),
+                subtitle: Text(_languageSubtitle),
+                trailing: const Icon(Icons.chevron_right_outlined, size: 20),
+                onTap: _pickLanguage,
               ),
             ],
           ),
