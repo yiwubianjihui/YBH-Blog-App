@@ -1,4 +1,4 @@
-name: Release APK
+﻿name: Release APK
 
 # 推送 v* 标签时构建 split APK 并挂到对应 GitHub Release。
 # 例：git tag v0.1.0 && git push origin v0.1.0
@@ -62,10 +62,13 @@ jobs:
         run: flutter pub get
 
       - name: Restore signing key
+        id: ks
         if: steps.gate.outputs.skip != 'true'
         # 签名密钥以 Secrets 形式托管（ANDROID_KEYSTORE_BASE64 等），
         # 在这里还原出仓库内被 .gitignore 排除的 key.properties 与 keystore，
         # 使 release 构建使用正式签名（与历史版本证书一致，可无缝升级）。
+        # 是否配置了密钥以 step output 传出（steps.ks.outputs.set），
+        # 不要用 `if: env.KS_SET == '1'` —— 步骤级 env 在自己步骤的 if 里不可见。
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -74,6 +77,7 @@ jobs:
         run: |
           if [ -z "$KS_B64" ]; then
             echo "::warning::ANDROID_KEYSTORE_BASE64 not set; APK will be debug-signed (fresh install only)"
+            echo "set=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "$KS_B64" | base64 -d > android/app/ybh-release.jks
@@ -84,19 +88,73 @@ jobs:
             echo "storeFile=ybh-release.jks"
           } > android/key.properties
           ls -l android/app/ybh-release.jks android/key.properties
+          echo "set=1" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve build number
+        id: bn
+        if: steps.gate.outputs.skip != 'true'
+        # Flutter 的 --split-per-abi 会在 pubspec 的 build number 之上再叠加 ABI 基数：
+        #   arm64-v8a   = 2 * 1000 + buildNumber
+        #   armeabi-v7a = 1 * 1000 + buildNumber
+        #   x86_64      = 4 * 1000 + buildNumber
+        # 依据：flutter_tools/gradle/src/main/kotlin/FlutterPlugin.kt:673
+        #   output.versionCodeOverride = abiVersionCode * 1000 + versionCode
+        # 其中 FlutterPluginConstants.kt:39 的 ABI_VERSION = {arm32:1, arm64:2, x86_64:4}。
+        #
+        # 历史约定是 arm64 落在 4000 段（v0.0.26 → 4026），所以 buildNumber 必须写 2000+n。
+        # 若直接沿用 pubspec 的 +n，arm64 会得到 2030 —— 低于设备上已装的 4030，
+        # adb install -r 直接 INSTALL_FAILED_VERSION_DOWNGRADE（v0.0.30 首次发版即踩此坑）。
+        run: |
+          set -euo pipefail
+          FULL=$(grep -m1 '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*//')
+          N="${FULL##*+}"
+          if ! [[ "$N" =~ ^[0-9]+$ ]]; then
+            echo "::error::pubspec.yaml 的 version 必须带 +N 形式的 build number，当前是 $FULL"
+            exit 1
+          fi
+          BN=$((2000 + N))
+          echo "bn=$BN" >> "$GITHUB_OUTPUT"
+          echo "pubspec=$FULL → --build-number=$BN"
+          echo "预期 versionCode：arm64=$((2000+BN)) / armeabi-v7a=$((1000+BN)) / x86_64=$((4000+BN))"
 
       - name: Build split APKs
         if: steps.gate.outputs.skip != 'true'
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --release --split-per-abi --build-number=${{ steps.bn.outputs.bn }}
 
-      - name: Verify release signature
-        # 若配置了签名密钥，校验 APK 证书与历史版本一致（CN=YBH Blog）。
-        if: steps.gate.outputs.skip != 'true' && env.KS_SET == '1'
+      - name: Verify APK versionCode and signature
+        # 两个断言：
+        #   1) versionCode 必须是 ABI基数*1000+buildNumber，否则手机上覆盖安装会被拒；
+        #   2) 若配置了签名密钥，证书必须是 CN=YBH Blog（与历史版本同证书才能升级）。
+        # 反例警告：不要写成 `if: env.KS_SET == '1'` —— 步骤级 env 在自己步骤的 if 里
+        # 不可见，条件恒假、步骤被静默跳过。v0.0.30 首次发版正是因此漏检了 versionCode。
+        if: steps.gate.outputs.skip != 'true'
         env:
-          KS_SET: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+          BN: ${{ steps.bn.outputs.bn }}
+          KS_SET: ${{ steps.ks.outputs.set }}
         run: |
-          "$ANDROID_HOME/build-tools/"*/apksigner verify --print-certs \
-            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk | head -3
+          set -euo pipefail
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "build-tools: $BT"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            case "$abi" in
+              arm64-v8a)   base=2 ;;
+              armeabi-v7a) base=1 ;;
+              x86_64)      base=4 ;;
+            esac
+            apk="build/app/outputs/flutter-apk/app-$abi-release.apk"
+            expect=$(( base * 1000 + BN ))
+            got=$("$BT/aapt2" dump badging "$apk" \
+                  | sed -nE "s/^package:.*versionCode='([0-9]+)'.*/\1/p" | head -1)
+            echo "$abi: versionCode=$got (expect $expect)"
+            [ "$got" = "$expect" ] || { echo "::error::$abi versionCode=$got != $expect"; exit 1; }
+            if [ "${KS_SET:-}" = "1" ]; then
+              "$BT/apksigner" verify --print-certs "$apk" | head -3
+              "$BT/apksigner" verify --print-certs "$apk" | grep -q 'CN=YBH Blog' \
+                || { echo "::error::$abi 签名证书不是 CN=YBH Blog"; exit 1; }
+            else
+              echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，跳过签名校验"
+            fi
+          done
 
       - name: Collect artifacts
         if: steps.gate.outputs.skip != 'true'
