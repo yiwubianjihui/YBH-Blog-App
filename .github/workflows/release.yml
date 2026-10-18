@@ -1,4 +1,4 @@
-﻿name: Release APK
+name: Release APK
 
 # 推送 v* 标签时构建 split APK 并挂到对应 GitHub Release。
 # 例：git tag v0.1.0 && git push origin v0.1.0
@@ -33,9 +33,13 @@ jobs:
       - name: Verify tag matches pubspec version
         id: gate
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          # workflow_dispatch 时 GITHUB_REF_NAME 是分支名（如 main），不是标签，
+          # 必须先取手动输入的 tag，否则手工重跑会误判成「历史归档」而静默跳过。
+          REF="${{ github.event.inputs.tag }}"
+          if [ -z "$REF" ]; then REF="$GITHUB_REF_NAME"; fi
+          TAG="${REF#v}"
           VER=$(grep -m1 '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*//; s/\+.*$//')
-          echo "tag=$TAG pubspec=$VER"
+          echo "ref=$REF tag=$TAG pubspec=$VER"
           if [ "$TAG" != "$VER" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::tag $TAG != pubspec version $VER — 跳过构建（历史版本归档不重新打包）"
