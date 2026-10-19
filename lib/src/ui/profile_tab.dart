@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -100,14 +101,57 @@ class _ProfileTabState extends State<ProfileTab> {
       _logging = true;
       _loginError = null;
     });
-    final ok = await wpAuth.login(_userController.text, _passController.text);
+    final result =
+        await wpAuth.login(_userController.text, _passController.text);
     if (!mounted) return;
     setState(() => _logging = false);
-    if (ok) {
+    if (result.ok) {
       _passController.clear();
       _loadMyPosts();
+      if (result.recoveredByFallback && kDebugMode) {
+        debugPrint('[profile] 已通过表单编码 + skip_captcha_check 兜底登录');
+      }
     } else {
-      setState(() => _loginError = '登录失败，请检查用户名与应用密码');
+      setState(() {
+        _loginError = _loginErrorText(result);
+      });
+      if (kDebugMode) {
+        debugPrint('[profile] 登录失败 '
+            '(${result.failure}/${result.statusCode}/${result.serverCode})');
+      }
+    }
+  }
+
+  /// 把 [WpLoginResult] 翻译成「用户看完知道下一步做什么」的提示。
+  static String _loginErrorText(WpLoginResult result) {
+    final detail = result.userMessage;
+    switch (result.failure) {
+      case WpLoginFailure.network:
+        return '无法连接服务器。请检查手机网络后重试；'
+            '若一直失败，可能是站点暂时无法访问。';
+      case WpLoginFailure.invalidCredentials:
+        return '用户名或密码不正确。\n'
+            '如果这是「应用密码」登录，请确认用的是后台「用户 → 应用密码」'
+            '里生成的那串密码，而不是账号登录密码。'
+            '${detail != null && detail.isNotEmpty ? '\n服务端说明：$detail' : ''}';
+      case WpLoginFailure.serverRestricted:
+        return '服务器拒绝了这次登录（HTTP ${result.statusCode ?? '?'}）。\n'
+            '常见原因：站点开启了人机验证码 / 安全防火墙，或短时间尝试过多。'
+            '请稍后重试，或改用浏览器登录。'
+            '${detail != null && detail.isNotEmpty ? '\n服务端说明：$detail' : ''}';
+      case WpLoginFailure.loginThrottled:
+        return '${detail != null && detail.isNotEmpty ? detail : '该网络登录失败次数过多，已暂时拒绝登录。'}\n'
+            '这段时间内换正确密码也一样登不进，请等待之后再试；'
+            '着急的话可以切到手机流量（换一个出口 IP）登录，'
+            '或直接到浏览器 www.yibianhui.cn 登录。';
+      case WpLoginFailure.serverError:
+        return '服务器暂时出了点问题（HTTP ${result.statusCode ?? '?'}），'
+            '这不是你的账号问题，请稍后再试。';
+      case WpLoginFailure.unknown:
+      case null:
+        return detail != null && detail.isNotEmpty
+            ? '登录失败：$detail'
+            : '登录失败（HTTP ${result.statusCode ?? '?'}），请稍后重试。';
     }
   }
 
