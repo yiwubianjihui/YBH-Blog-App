@@ -105,7 +105,10 @@ jobs:
         #   output.versionCodeOverride = abiVersionCode * 1000 + versionCode
         # 其中 FlutterPluginConstants.kt:39 的 ABI_VERSION = {arm32:1, arm64:2, x86_64:4}。
         #
-        # 历史约定是 arm64 落在 4000 段（v0.0.26 → 4026），所以 buildNumber 必须写 2000+n。
+        # 历史约定是 arm64 落在 4000 段（v0.0.26 → 4026；v0.1.0+31 → 4031），
+        # 所以 buildNumber 必须写 2000+n。
+        # ⚠️ versionCode 只由 pubspec 的 +N 决定，**与 MAJOR/MINOR/PATCH 无关** ——
+        # 把 0.0.30 改成 0.1.0 不会抬高 versionCode，只有 +N 递增才会。
         # 若直接沿用 pubspec 的 +n，arm64 会得到 2030 —— 低于设备上已装的 4030，
         # adb install -r 直接 INSTALL_FAILED_VERSION_DOWNGRADE（v0.0.30 首次发版即踩此坑）。
         run: |

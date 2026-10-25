@@ -61,6 +61,16 @@ class PostSummary {
       ? rawContent!
       : content;
 
+  /// 这条摘要**是否带着正文**。
+  ///
+  /// 列表请求默认把 `content.rendered` 一起带回来（详情页直接复用，省一次往返），
+  /// 所以从「文章」Tab 进来的文章 `hasBody == true`，不需要补拉。
+  ///
+  /// 但**日历视图刻意不带正文**（见 [BlogApi.fieldsForCalendar]）：100 篇全文实测
+  /// 984 KB / 12.3 秒，会把 25 秒超时踩穿。这类文章 `hasBody == false`，
+  /// 由详情页按 id 补拉正文 —— 见 [BlogApi.fetchPost]。
+  bool get hasBody => content.trim().isNotEmpty;
+
   /// 非已发布状态的中文标签（用于在列表中提示投稿进度）。
   String? get statusLabel => switch (status) {
         'draft' => '草稿',
@@ -143,6 +153,16 @@ abstract final class BlogApi {
   /// [after] / [before] 是 WordPress 的**日期区间**过滤（ISO8601，站内时间），
   /// 「全部文章」的日历视图用它一次取回一整个月的文章，再按天归档
   /// —— 比逐天请求少 30 倍的往返。
+  ///
+  /// [fields] 对应 REST 的 `_fields`（逗号分隔的白名单）。**默认 null = 返回全字段**，
+  /// 也就是每篇都带着完整 `content.rendered`。这正是历史行为：列表把正文顺带带回来，
+  /// 详情页直接复用，省掉一次往返。
+  ///
+  /// ⚠️ 但「一次很多篇」的调用必须显式裁剪，否则响应会大到把超时踩穿 ——
+  /// 日历视图 100 篇全字段实测 **984 KB / 12.3 秒**（偶发 19.8 秒），
+  /// 而裁到 `id,date,title,link` 只要 **15 KB / 2.1 秒**。见 [fieldsForCalendar]。
+  ///
+  /// `_fields` 不会影响 `X-WP-Total` 响应头（已实测），所以分页逻辑不受影响。
   static Future<PostsPage> fetchPosts({
     int? categoryId,
     int? tagId,
@@ -151,6 +171,7 @@ abstract final class BlogApi {
     int perPage = 20,
     String? after,
     String? before,
+    String? fields,
   }) async {
     final uri = Uri.parse('${AppConfig.apiBase}/posts').replace(
       queryParameters: {
@@ -164,6 +185,7 @@ abstract final class BlogApi {
         if (search != null && search.isNotEmpty) 'search': search,
         if (after != null && after.isNotEmpty) 'after': after,
         if (before != null && before.isNotEmpty) 'before': before,
+        if (fields != null && fields.isNotEmpty) '_fields': fields,
       },
     );
     final response = await http.get(uri).timeout(_timeout);
@@ -183,6 +205,54 @@ abstract final class BlogApi {
     // 放在这里而不是每个调用方：全 App 的文章列表只有这一条数据入口。
     await CoverCache.bind(posts);
     return PostsPage(posts: posts, total: total, totalPages: totalPages);
+  }
+
+  /// 列表卡片要用的字段白名单。
+  ///
+  /// **保留 `content`** —— 详情页正文直接复用列表带回来的这份（[PostDetailPage]
+  /// 不会自己再请求一遍）。去掉的是 `guid` / `slug` / `modified*` / `meta` /
+  /// `class_list` / `template` / `comment_status` 等本 App 从不读的字段。
+  ///
+  /// 实测（20 篇）：184 KB → 171 KB。省得不多是因为正文本身占了大头，
+  /// 但删掉的全是无用负载，没有理由继续传。
+  static const String fieldsForList =
+      'id,date,title,excerpt,content,link,_embedded,_links';
+
+  /// 日历视图要用的字段白名单 —— **刻意不含 `content`**。
+  ///
+  /// 日历一格只画「几号、几篇、标题」，正文一格都用不上：
+  /// * 全字段 100 篇：**1,007,785 B / 12.3–19.8 秒**（踩穿 25 秒超时的直接原因）
+  /// * 本白名单（通常 50 篇上下）：**15,376 B / 2.1 秒**
+  ///
+  /// 代价：`terms` 为空（术语来自 `_embedded`），所以日历的当天列表不显示分类，
+  /// 改成显示日期；正文在点开某篇时按 id 补拉（[fetchPost]）。
+  /// 也**不要**在这里加 `_links` 想拿分类 —— 它只会把术语的 href 给你，
+  /// 拿不到名字，体积却从 15 KB 涨到 71 KB。
+  static const String fieldsForCalendar = 'id,date,title,link';
+
+  /// 按 id 拉**单篇**。日历视图的文章没有正文（见 [fieldsForCalendar]），
+  /// 详情页打开时用它补齐。
+  ///
+  /// 实测单篇约 **17 KB / 2.5 秒**，且只在该篇被打开时发生一次；
+  /// 相比「进页面先花 12 秒拉 1 MB」，这是数量级的改善。
+  ///
+  /// 失败一律返回 null —— 调用方显示「正文没能载入 + 重试」，不抛异常打断阅读。
+  static Future<PostSummary?> fetchPost(int id, {String? fields}) async {
+    if (id <= 0) return null;
+    try {
+      final uri = Uri.parse('${AppConfig.apiBase}/posts/$id').replace(
+        queryParameters: {
+          if (fields != null && fields.isNotEmpty) '_fields': fields,
+        },
+      );
+      final response = await http.get(uri).timeout(_timeout);
+      if (response.statusCode != 200) return null;
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+      if (decoded is! Map<String, dynamic>) return null;
+      return PostSummary.fromJson(decoded);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 一次取 N 张**互不重复**的封面（`rand-cover.php?n=N`，返回 `{"urls":[...]}`）。

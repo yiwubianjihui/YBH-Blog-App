@@ -34,13 +34,62 @@ class _PostDetailPageState extends State<PostDetailPage> {
   /// 阅读器滚动位置（CSS px）。用来让 AppBar 的标题**滚过正文标题后才出现**。
   final ValueNotifier<double> _scrollY = ValueNotifier<double>(0);
 
+  /// 已按 id 补齐正文的文章（键 = 文章 id）。
+  ///
+  /// 为什么需要：列表请求把 `content.rendered` 一起带回来，所以从「文章」Tab 进来的
+  /// 每篇都有正文。但**日历视图刻意不带正文**（100 篇全文实测 984 KB / 12.3 秒，
+  /// 会把超时踩穿，见 [BlogApi.fieldsForCalendar]），那些文章点开时正文是空的 ——
+  /// 这里补拉一次，补完记下来，来回翻页不再重复请求。
+  final Map<int, PostSummary> _hydrated = <int, PostSummary>{};
+
+  /// 正在补正文。
+  bool _hydrating = false;
+
+  /// 补正文失败（显示重试，而不是让用户对着空白页）。
+  bool _hydrateFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureBody();
+  }
+
   @override
   void dispose() {
     _scrollY.dispose();
     super.dispose();
   }
 
-  PostSummary get _post => widget.posts[_index];
+  /// 列表里那一份（可能没有正文）。
+  PostSummary get _summary => widget.posts[_index];
+
+  /// 实际用于渲染的那一份（补过就用补的）。
+  PostSummary get _post => _hydrated[_summary.id] ?? _summary;
+
+  /// 当前这篇如果没有正文，按 id 拉一次。
+  Future<void> _ensureBody() async {
+    final target = _summary;
+    if (target.hasBody || _hydrated.containsKey(target.id)) return;
+    setState(() {
+      _hydrating = true;
+      _hydrateFailed = false;
+    });
+    final full = await BlogApi.fetchPost(target.id);
+    if (!mounted) return;
+    // 拉取期间用户可能已经翻到别的文章 —— 只认当前这篇的结果。
+    if (_summary.id != target.id) {
+      if (full != null && full.hasBody) _hydrated[target.id] = full;
+      return;
+    }
+    setState(() {
+      _hydrating = false;
+      if (full != null && full.hasBody) {
+        _hydrated[target.id] = full;
+      } else {
+        _hydrateFailed = true;
+      }
+    });
+  }
 
   bool get _hasPrev => _index > 0;
   bool get _hasNext => _index < widget.posts.length - 1;
@@ -79,11 +128,13 @@ class _PostDetailPageState extends State<PostDetailPage> {
   void _goPrev() {
     if (_hasPrev) setState(() => _index--);
     _scrollY.value = 0;
+    _ensureBody();
   }
 
   void _goNext() {
     if (_hasNext) setState(() => _index++);
     _scrollY.value = 0;
+    _ensureBody();
   }
 
   Future<void> _share() async {
@@ -145,7 +196,14 @@ class _PostDetailPageState extends State<PostDetailPage> {
           ),
         ],
       ),
-      body: _useWebView
+      // 正文还没到位（日历视图带过来的文章）→ 先给占位。
+      // 绝不能拿空 content 去建 WebView：那会整屏纯白，用户看到的就是「点开白页」。
+      body: !post.hasBody
+          ? _PostBodyPending(
+              loading: _hydrating || !_hydrateFailed,
+              onRetry: _ensureBody,
+            )
+          : _useWebView
           // 标题 / 时间 / 分类都塞进正文里，随正文一起滚走。
           ? ArticleWebView(
               content: post.content,
@@ -257,6 +315,60 @@ class _PostDetailPageState extends State<PostDetailPage> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 正文占位：日历视图来的文章本身不带正文（[BlogApi.fieldsForCalendar]），
+/// 由 [_PostDetailPageState._ensureBody] 按 id 补拉。补拉中 / 补拉失败时显示它。
+///
+/// 为什么要有它：`ArticleWebView(content: '')` 不会报错，只会渲染一张**纯白**的页面 ——
+/// 用户以为应用坏了。宁可明确说「正文没能载入」，也不要给一片白。
+class _PostBodyPending extends StatelessWidget {
+  const _PostBodyPending({required this.loading, required this.onRetry});
+
+  final bool loading;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    if (loading) {
+      return const Center(
+        child: SizedBox(
+          width: 26,
+          height: 26,
+          child: CircularProgressIndicator(strokeWidth: 2.5),
+        ),
+      );
+    }
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cloud_off_outlined, size: 44, color: colorScheme.outline),
+            const SizedBox(height: 12),
+            Text('正文没能载入',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurface)),
+            const SizedBox(height: 6),
+            Text('可能是网络不太好。可以点重试，或用下方的「网页查看」直接看这篇。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 12.5, color: colorScheme.outline, height: 1.5)),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('重试'),
+            ),
+          ],
         ),
       ),
     );

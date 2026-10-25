@@ -234,6 +234,7 @@ class _TagPostsPageState extends State<TagPostsPage> {
         tagId: widget.tag.id,
         page: page,
         perPage: 20,
+        fields: BlogApi.fieldsForList,
       );
       if (!mounted) return;
       setState(() {

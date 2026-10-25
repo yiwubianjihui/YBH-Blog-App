@@ -3,7 +3,7 @@ import 'package:yibianhui_blog/src/data/update_checker.dart';
 
 void main() {
   group('parseVersion', () {
-    test('解析标准 0.0.X 格式', () {
+    test('解析标准三段格式', () {
       expect(UpdateChecker.parseVersion('0.0.5'), (0, 0, 5));
       expect(UpdateChecker.parseVersion('0.0.1'), (0, 0, 1));
       expect(UpdateChecker.parseVersion('1.2.3'), (1, 2, 3));
@@ -40,6 +40,16 @@ void main() {
     test('次版本号跃迁（0.0.9 → 0.1.0）判定为更新', () {
       expect(UpdateChecker.isNewerVersion('0.0.9', '0.1.0'), isTrue);
       expect(UpdateChecker.isNewerVersion('0.1.0', '0.0.9'), isFalse);
+    });
+
+    test('0.1.0 发版的真实升级路径：0.0.30 → 0.1.0 必须判定为更新', () {
+      // 这条是 0.1.0 发版的防线：线上用户装的是 0.0.30，更新清单写 0.1.0。
+      // 若这里判成 false，所有老用户永远收不到更新提示 —— 而且不报错、静默失败。
+      expect(UpdateChecker.isNewerVersion('0.0.30', '0.1.0'), isTrue);
+      expect(UpdateChecker.isNewerVersion('0.0.30', '0.1.1'), isTrue);
+      expect(UpdateChecker.isNewerVersion('0.1.0', '0.1.1'), isTrue);
+      expect(UpdateChecker.isNewerVersion('0.1.0', '0.0.30'), isFalse);
+      expect(UpdateChecker.isNewerVersion('0.1.1', '0.1.0'), isFalse);
     });
   });
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/blog_api.dart';
@@ -15,6 +17,16 @@ import 'posts_tab.dart';
 /// * 数据按**整月一次**取回（`after`/`before` 日期区间），不是逐天请求 —— 89 篇文章
 ///   一个月通常一两篇，逐天要 30 次往返，整月只要 1 次；
 /// * 列表视图直接复用 [PostsTab]（分类筛选、下拉刷新、触底加载都在里面）。
+///
+/// ## 两个坑（2026-10-25 修复，用户反馈"全部文章页面打不开"）
+///
+/// 1. **请求必须先裁字段**。此前这里用默认全字段 + `_embed=1` 拉一整月，
+///    实测 52 篇就是 **1,007,785 B / 12.3 秒（偶发 19.8 秒）** —— 而 App 的超时是
+///    25 秒，移动网络下必然踩穿，页面就卡在加载态。现在走
+///    [BlogApi.fieldsForCalendar]，同一个月份 **15,376 B / 2.1 秒**。
+/// 2. **不能在 `initState` 里加载**。默认视图是列表，用户可能根本不看日历；
+///    原先无条件预载，等于每次进页面都白拉 1 MB，还和列表请求抢带宽 ——
+///    两边一起变慢，观感就是"整页打不开"。现在切到日历才拉。
 class ArticleCalendarPage extends StatefulWidget {
   const ArticleCalendarPage({super.key});
 
@@ -35,15 +47,46 @@ class _ArticleCalendarPageState extends State<ArticleCalendarPage> {
   bool _loading = false;
   Object? _error;
 
+  /// 当前月份是否**已经发起过**加载。
+  ///
+  /// 日历是「按需视图」：默认列表模式下一个月数据都不需要，只有切过来才拉。
+  /// 用这个标记区分「还没加载过」和「加载过但本月 0 篇」—— 两者都表现为
+  /// `_byDay.isEmpty`，但文案完全不同（"本月无更新" vs 空白）。
+  bool _monthLoaded = false;
+
   /// 选中的某一天（null = 未选，右侧不显示列表）。
   DateTime? _selectedDay;
 
   static String _two(int v) => v.toString().padLeft(2, '0');
 
+  /// 把异常翻成一句人能读的原因（见错误块）。
+  static String _errorReason(Object e) {
+    if (e is TimeoutException) {
+      return '请求超时：服务器这段时间没响应。多半是网络慢或站点正忙，稍后点重试。';
+    }
+    if (e is StateError) {
+      // BlogApi 对非 200 抛的就是 StateError('HTTP xxx')
+      return '服务端返回异常（${e.message}）。可以点重试，或先用网页版确认站点是否正常。';
+    }
+    final text = '$e'.replaceFirst('Exception: ', '').trim();
+    return text.isEmpty ? '原因未知' : text;
+  }
+
   @override
   void initState() {
     super.initState();
-    _loadMonth();
+    // ⚠️ 这里**刻意不加载**，见类注释第 2 条：默认视图是列表，
+    // 预载日历等于每次进页面白拉 1 MB，还会把列表请求一起拖慢。
+    // 首次加载由 [_toggleMode] 在真正切到日历时触发。
+  }
+
+  /// 列表 ⇄ 日历。切到日历时，若当前月还没取过，才发请求。
+  void _toggleMode() {
+    final next = !_calendarMode;
+    setState(() => _calendarMode = next);
+    if (next && !_monthLoaded && !_loading) {
+      _loadMonth();
+    }
   }
 
   /// 取回当前月份的文章（含下月 1 日 0 点前的边界，避免月底漏掉当天）。
@@ -58,6 +101,7 @@ class _ArticleCalendarPageState extends State<ArticleCalendarPage> {
     try {
       final page = await BlogApi.fetchPosts(
         perPage: 100,
+        fields: BlogApi.fieldsForCalendar,
         after: '${from.year}-${_two(from.month)}-${_two(from.day)}T00:00:00',
         before: '${to.year}-${_two(to.month)}-${_two(to.day)}T00:00:00',
       );
@@ -73,12 +117,16 @@ class _ArticleCalendarPageState extends State<ArticleCalendarPage> {
       setState(() {
         _byDay = map;
         _loading = false;
+        _monthLoaded = true;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
         _error = e;
+        // 失败也算"拉过"：否则每次重绘都会再触发一轮自动加载（抖动循环）。
+        // 重试由用户点按钮发起。
+        _monthLoaded = true;
       });
     }
   }
@@ -87,6 +135,8 @@ class _ArticleCalendarPageState extends State<ArticleCalendarPage> {
     setState(() {
       _month = DateTime(_month.year, _month.month + delta);
       _selectedDay = null;
+      // 换月了，上个月的数据不能继续挂在界面上（会画到错误的格子里）。
+      _byDay = const {};
     });
     _loadMonth();
   }
@@ -105,7 +155,7 @@ class _ArticleCalendarPageState extends State<ArticleCalendarPage> {
         actions: [
           IconButton(
             tooltip: _calendarMode ? '切换为列表' : '切换为日历',
-            onPressed: () => setState(() => _calendarMode = !_calendarMode),
+            onPressed: _toggleMode,
             icon: Icon(_calendarMode ? Icons.view_list_outlined : Icons.calendar_month_outlined),
           ),
         ],
@@ -134,6 +184,14 @@ class _ArticleCalendarPageState extends State<ArticleCalendarPage> {
               children: [
                 Text('这个月的文章没取到',
                     style: TextStyle(color: colorScheme.error, fontSize: 13.5)),
+                const SizedBox(height: 4),
+                // 把真实原因摊出来：用户反馈「打不开」时，光一句"没取到"
+                // 既没法自助、也没法让我们定位到底是超时、404 还是被墙。
+                Text(
+                  _errorReason(_error!),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 11.5, color: colorScheme.outline),
+                ),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
                   onPressed: _loadMonth,
@@ -168,7 +226,9 @@ class _ArticleCalendarPageState extends State<ArticleCalendarPage> {
           Text('${_month.year} 年 ${_month.month} 月',
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
           const SizedBox(width: 10),
-          if (!_loading && _error == null)
+          // `_monthLoaded` 是必须的：日历按需加载，未加载时 `_byDay` 是空的，
+          // 只看空表会误报「本月无更新」。
+          if (!_loading && _error == null && _monthLoaded)
             Text(total == 0 ? '本月无更新' : '本月 $total 篇',
                 style: TextStyle(fontSize: 12.5, color: colorScheme.outline)),
           const Spacer(),
@@ -342,10 +402,11 @@ class _ArticleCalendarPageState extends State<ArticleCalendarPage> {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
-          subtitle: p.terms.isEmpty
-              ? null
-              : Text(p.terms.take(2).join(' · '),
-                  style: TextStyle(fontSize: 12, color: colorScheme.primary)),
+          // 日历请求刻意不带 `_embedded`（省 56 KB / 2.7 秒），
+          // 所以 `terms` 一定是空的 —— 此时给一句可点提示，别留半行空白。
+          subtitle: Text(
+              p.terms.isEmpty ? '点开阅读' : p.terms.take(2).join(' · '),
+              style: TextStyle(fontSize: 12, color: colorScheme.primary)),
           trailing: const Icon(Icons.chevron_right_outlined, size: 20),
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(

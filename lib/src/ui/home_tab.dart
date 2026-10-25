@@ -62,7 +62,8 @@ class _HomeTabState extends State<HomeTab> {
       final posts = await BlogApi.fetchPostsBySlugs(config.featured);
       if (posts.isNotEmpty) return posts;
     }
-    final page = await BlogApi.fetchPosts(perPage: 5);
+    final page =
+        await BlogApi.fetchPosts(perPage: 5, fields: BlogApi.fieldsForList);
     return page.posts;
   }
 

@@ -74,7 +74,11 @@ class _SearchPageState extends State<SearchPage> {
       setState(() => _loadingMore = true);
     }
     try {
-      final result = await BlogApi.fetchPosts(search: query, page: page, perPage: 20);
+      final result = await BlogApi.fetchPosts(
+          search: query,
+          page: page,
+          perPage: 20,
+          fields: BlogApi.fieldsForList);
       if (!mounted) return;
       setState(() {
         if (reset) {

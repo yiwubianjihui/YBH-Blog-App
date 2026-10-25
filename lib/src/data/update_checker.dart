@@ -53,7 +53,11 @@ abstract final class UpdateChecker {
     return (nums[0], nums[1], nums[2]);
   }
 
-  /// 当前版本是否低于 [latest]（都在 0.0.X 语义下比较）。
+  /// 当前版本是否低于 [latest]。
+  ///
+  /// 按 `MAJOR.MINOR.PATCH` **逐段数值**比较，不按字符串 —
+  /// 否则 `0.1.0` 会被判成低于 `0.0.9`、`0.0.10` 会低于 `0.0.9`，
+  /// 老用户就永远收不到更新提示。
   static bool isNewerVersion(String current, String latest) {
     final c = parseVersion(current);
     final l = parseVersion(latest);

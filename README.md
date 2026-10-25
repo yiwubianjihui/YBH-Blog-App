@@ -10,7 +10,17 @@
 - **当前重点：Android APK**（已构建、可安装）
 - 其他平台：iOS（已生成工程，需 macOS/Xcode 构建）、Web（已构建 PWA）、Windows/macOS/Linux（桌面壳，跳转系统浏览器）
 
-> 版本号采用 `0.0.X` 格式：X 每次发版 +1（当前 0.0.11）。
+> **版本命名规则**：`MAJOR.MINOR.PATCH+N`（语义化）。
+>
+> | 位 | 何时 +1 | 说明 |
+> |---|---|---|
+> | `PATCH` | **每次发版** | 修 bug、小改进都走这里：`0.1.0 → 0.1.1 → 0.1.2 …` |
+> | `MINOR` | 攒够一批功能 / 有不兼容改动 | `0.1.x → 0.2.0`；`0.0.x → 0.1.0` 属于这次跃迁 |
+> | `MAJOR` | 不兼容大改或转正式版 | 目前仍是 `0.x`，表示接口与交互仍可能调整 |
+> | `+N` | **每次发版必须 +1，永不回退** | build number。CI 取 `BN = 2000 + N` 传给 Flutter，arm64 的 versionCode 因此是 **4000 + N**（`0.1.0+31` → `4031`）；回退会让用户**无法覆盖安装**，只能卸载重装 |
+>
+> 当前 **`0.1.0+31`**（上一版 `0.0.30+30`）。发版时 `pubspec.yaml`、`git tag`（`v0.1.0`）、
+> 线上 `update/version.json` 三处的版本号必须一致，否则更新提示对不上。
 
 ## 功能
 
@@ -104,7 +114,7 @@ flutter build ios --release
 - 签名参数：`android/key.properties`（已加入 `.gitignore`，**两者的密码不要写进任何文档或提交**）
 - CI 通过仓库 Secrets 还原密钥：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、
   `ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`（见 `.github/workflows/release.yml`）
-- 应用 ID：`cn.yibianhui.blog`，应用名：`YBH`，版本 `0.0.11 (11)`
+- 应用 ID：`cn.yibianhui.blog`，应用名：`YBH`，版本 `0.1.0 (31)`
 
 > **安全提示**：分发源码包时务必排除 `android/key.properties` 与 `android/app/*.jks`。
 > 这两个文件合起来就是完整签名私钥，一旦泄露，任何人都能以你的证书签名伪造安装包。
@@ -138,7 +148,7 @@ flutter test
 ```
 
 - 每次 PR 会自动运行 CI（`flutter analyze --fatal-infos` / `flutter test`），两项均需通过。
-- 推送 `v*` 标签（如 `git tag v0.0.11 && git push origin v0.0.11`）会自动构建正式签名的 split APK
+- 推送 `v*` 标签（如 `git tag v0.1.0 && git push origin v0.1.0`）会自动构建正式签名的 split APK
   并创建 Release。工作流会先校验「标签版本号 == `pubspec.yaml` 的 version」，
   不匹配则跳过构建——这样历史版本归档标签（v0.0.5、v1.0.0 等）不会被当前代码重新打包覆盖。
 - 分类顺序等用户偏好仅保存在本机 `SharedPreferences`，不会上传。

@@ -138,6 +138,8 @@ class PostsTabState extends State<PostsTab> {
       final result = await BlogApi.fetchPosts(
         categoryId: _selectedCategoryId,
         page: page,
+        // 白名单保留 content：详情页正文直接复用列表带回来的这份，不再多一次往返。
+        fields: BlogApi.fieldsForList,
       );
       if (!mounted) return;
       setState(() {
@@ -168,6 +170,8 @@ class PostsTabState extends State<PostsTab> {
       final result = await BlogApi.fetchPosts(
         categoryId: _selectedCategoryId,
         page: page,
+        // 白名单保留 content：详情页正文直接复用列表带回来的这份，不再多一次往返。
+        fields: BlogApi.fieldsForList,
       );
       if (!mounted) return;
       setState(() {
